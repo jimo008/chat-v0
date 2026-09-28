@@ -10,6 +10,7 @@ import (
 
 func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store, max-age=0")
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprintf(w, `(function(){
   var script = document.currentScript;
@@ -112,6 +113,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
 	siteName := html.EscapeString(siteLabel)
 	entryURL := html.EscapeString(r.URL.Query().Get("entry_url"))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store, max-age=0")
 	w.WriteHeader(http.StatusOK)
 	page := `<!doctype html>
 <html lang="zh-CN">
@@ -279,8 +281,11 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   }
   function formatTime(value){
     if (!value) return "刚刚";
-    var d = new Date(value);
-    if (isNaN(d.getTime())) return String(value).slice(11,16) || "刚刚";
+    var raw = String(value);
+    var plain = raw.match(/[T\s](\d{2}:\d{2})/);
+    if (plain && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw)) return plain[1];
+    var d = new Date(raw);
+    if (isNaN(d.getTime())) return plain ? plain[1] : "刚刚";
     return d.toLocaleTimeString("zh-CN", {hour:"2-digit", minute:"2-digit", hour12:false, timeZone:"Asia/Shanghai"});
   }
   function attachmentURL(id){ return api + "/api/v1/customer/attachments/" + encodeURIComponent(id) + "?token=" + encodeURIComponent(token); }
@@ -388,7 +393,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   }
   function sendRead(){
     if (!canMarkRead()) return;
-    fetch(api + "/api/v1/customer/read", {method:"POST", headers:authHeaders(), body:JSON.stringify({up_to_seq:lastReadSeq})}).catch(function(){});
+    fetch(api + "/api/v1/customer/read", {method:"POST", headers:authHeaders(), body:JSON.stringify({up_to_seq:lastReadSeq,visible:true})}).catch(function(){});
   }
   document.addEventListener("visibilitychange", sendRead);
   window.addEventListener("focus", sendRead);

@@ -7,6 +7,7 @@ import (
 
 type customerReadRequest struct {
 	UpToSeq uint64 `json:"up_to_seq"`
+	Visible bool   `json:"visible"`
 }
 
 func (s *Server) customerRead(w http.ResponseWriter, r *http.Request) {
@@ -20,7 +21,8 @@ func (s *Server) customerRead(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
 		return
 	}
-	if req.UpToSeq == 0 {
+	if req.UpToSeq == 0 || !req.Visible {
+		s.logger.Info("customer read ignored", "conversation_id", customer.ConversationID, "customer_id", customer.CustomerID, "up_to_seq", req.UpToSeq, "visible", req.Visible)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "up_to_seq_required"})
 		return
 	}

@@ -112,12 +112,14 @@ class AgentForegroundService : Service() {
             when (event.optString("type")) {
                 "MESSAGE_CREATED" -> {
                     val payload = event.optJSONObject("payload") ?: event.optJSONObject("payload_json")
-                    val conversationId = payload?.optLong("conversation_id", 0L) ?: 0L
-                    val content = when (payload?.optString("type")) {
-                        "image" -> "[图片消息]"
-                        else -> payload?.optString("content").orEmpty().ifBlank { "新的客户消息" }
+                    if (payload?.optString("sender_type") == "customer") {
+                        val conversationId = payload.optLong("conversation_id", 0L)
+                        val content = when (payload.optString("type")) {
+                            "image" -> "[图片消息]"
+                            else -> payload.optString("content").ifBlank { "新的客户消息" }
+                        }
+                        notifyNormal(if (conversationId > 0) "#$conversationId $content" else content)
                     }
-                    notifyNormal(if (conversationId > 0) "#$conversationId $content" else content)
                 }
                 "EMERGENCY_STARTED" -> {
                     val payload = event.optJSONObject("payload") ?: event.optJSONObject("payload_json")
@@ -170,7 +172,6 @@ class AgentForegroundService : Service() {
             .setVibrate(if (emergency) longArrayOf(0, 700, 300, 700, 300, 700) else longArrayOf(0, 200, 100, 200))
             .setDefaults(Notification.DEFAULT_ALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setFullScreenIntent(pendingIntent, emergency || alert)
             .build()
     }
 

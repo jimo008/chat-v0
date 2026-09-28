@@ -15,7 +15,7 @@ Usage:
   ./supportctl init-agent
   ./supportctl site create
   ./supportctl site list
-  ./supportctl site code
+  ./supportctl site code <site_key>
 
 V1 admin is CLI-first. Web admin is intentionally not included.
 USAGE
@@ -23,19 +23,48 @@ USAGE
 
 require_env() {
   if [[ ! -f "$ENV_FILE" ]]; then
-    echo "Missing .env. Copy .env.example to .env and edit it first." >&2
+    echo "Missing .env. Run ./supportctl install first." >&2
     exit 1
   fi
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+}
+
+base_url() {
+  echo "${APP_BASE_URL:-http://localhost:8080}"
+}
+
+admin_token() {
+  if [[ -z "${ADMIN_TOKEN:-}" || "${ADMIN_TOKEN:-}" == "change-this-long-random-admin-token" ]]; then
+    echo "ADMIN_TOKEN is not configured. Edit .env or rerun ./supportctl install before starting the stack." >&2
+    exit 1
+  fi
+  echo "$ADMIN_TOKEN"
 }
 
 compose() {
   docker compose --env-file "$ENV_FILE" "$@"
 }
 
+random_token() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+    return
+  fi
+  date +%s%N | sha256sum | awk '{print $1}'
+}
+
 cmd_install() {
   if [[ ! -f "$ENV_FILE" ]]; then
     cp "$ROOT_DIR/.env.example" "$ENV_FILE"
-    echo "Created .env from .env.example. Edit it before running ./supportctl up."
+    token="$(random_token)"
+    tmp="${ENV_FILE}.tmp"
+    sed "s/^ADMIN_TOKEN=.*/ADMIN_TOKEN=${token}/" "$ENV_FILE" > "$tmp"
+    mv "$tmp" "$ENV_FILE"
+    echo "Created .env from .env.example and generated ADMIN_TOKEN."
+    echo "Edit .env, especially APP_BASE_URL and Postal/MySQL passwords, then run ./supportctl up."
     return
   fi
   echo ".env already exists. Nothing changed."
@@ -56,7 +85,10 @@ cmd_status() {
   compose ps
   echo
   echo "Health:"
-  curl -fsS "${APP_BASE_URL:-http://localhost:8080}/healthz" || true
+  curl -fsS "$(base_url)/healthz" || true
+  echo
+  echo "Readiness:"
+  curl -fsS "$(base_url)/readyz" || true
   echo
 }
 
@@ -78,32 +110,54 @@ Planned behavior:
   - prompt for username/email/password
   - hash password server-side
   - create the first agent account
-
-For now this command marks the intended operator workflow.
 MSG
+}
+
+api_curl() {
+  local method="$1"
+  local path="$2"
+  local body="${3:-}"
+  if [[ -n "$body" ]]; then
+    curl -fsS -X "$method" "$(base_url)$path" \
+      -H "Authorization: Bearer $(admin_token)" \
+      -H "Content-Type: application/json" \
+      --data "$body"
+  else
+    curl -fsS -X "$method" "$(base_url)$path" \
+      -H "Authorization: Bearer $(admin_token)"
+  fi
+}
+
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
 cmd_site_create() {
   require_env
-  cat <<'MSG'
-site create is not wired yet.
-
-Planned behavior:
-  - prompt for Site name
-  - create unique site_key
-  - print deployment code:
-    <script src="https://chat.example.com/widget.js" data-site="1001"></script>
-MSG
+  printf "Site name: "
+  read -r name
+  if [[ -z "$name" ]]; then
+    echo "Site name is required." >&2
+    exit 1
+  fi
+  api_curl POST /api/v1/admin/sites "{\"name\":\"$(json_escape "$name")\"}"
+  echo
 }
 
 cmd_site_list() {
   require_env
-  echo "site list is not wired yet."
+  api_curl GET /api/v1/admin/sites
+  echo
 }
 
 cmd_site_code() {
   require_env
-  echo "site code is not wired yet."
+  local site_key="${1:-}"
+  if [[ -z "$site_key" ]]; then
+    echo "Usage: ./supportctl site code <site_key>" >&2
+    exit 1
+  fi
+  echo "<script src=\"$(base_url)/widget.js\" data-site=\"${site_key}\"></script>"
 }
 
 main() {

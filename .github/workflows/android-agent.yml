@@ -5,6 +5,7 @@ on:
     paths:
       - "android-agent/**"
       - "build.gradle.kts"
+      - "gradle.properties"
       - "settings.gradle.kts"
       - ".github/workflows/android-agent.yml"
   workflow_dispatch:

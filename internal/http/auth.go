@@ -75,6 +75,9 @@ func (s *Server) requireCustomer(next http.Handler) http.Handler {
 		auth := r.Header.Get("Authorization")
 		token := strings.TrimPrefix(auth, "Bearer ")
 		if token == "" || token == auth {
+			token = strings.TrimSpace(r.URL.Query().Get("token"))
+		}
+		if token == "" {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing_customer_token"})
 			return
 		}

@@ -70,6 +70,9 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     .msg { max-width: 82%; padding: 9px 10px; border-radius: 8px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
     .customer { align-self: flex-end; background: #2563eb; color: #fff; }
     .agent { align-self: flex-start; background: #fff; border: 1px solid #e2e8f0; color: #111827; }
+    .msg.imageMsg { padding: 4px; background: transparent; border: 0; }
+    .msgImage { display: block; max-width: 180px; max-height: 180px; border-radius: 8px; object-fit: cover; cursor: zoom-in; border: 1px solid #d7dde8; background: #fff; }
+    .customer .msgImage { border-color: rgba(255,255,255,.38); }
     .system { align-self: center; color: #64748b; font-size: 12px; text-align: center; }
     .system.success { color: #15803d; background: #dcfce7; border: 1px solid #86efac; border-radius: 8px; padding: 9px 10px; font-size: 13px; font-weight: 650; max-width: 86%; }
     .system.error { color: #b91c1c; background: #fee2e2; border: 1px solid #fecaca; border-radius: 8px; padding: 9px 10px; font-size: 13px; font-weight: 650; max-width: 86%; }
@@ -106,6 +109,9 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
       <button id="emergency" class="emergency">紧急呼叫客服</button>
     </div>
   </div>
+  <div id="lightbox" class="hidden" style="position:fixed; inset:0; z-index:10; background:rgba(15,23,42,.82); display:none; align-items:center; justify-content:center; padding:18px;">
+    <img id="lightboxImg" alt="原图" style="max-width:100%; max-height:100%; border-radius:8px; background:#fff;">
+  </div>
 <script>
 (function(){
   var site = "__SITE__";
@@ -114,6 +120,8 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var tokenKey = "chat_v0_token_" + site;
   var token = localStorage.getItem(tokenKey) || "";
   var messagesEl = document.getElementById("messages");
+  var lightboxEl = document.getElementById("lightbox");
+  var lightboxImgEl = document.getElementById("lightboxImg");
   var authEl = document.getElementById("auth");
   var composerEl = document.getElementById("composer");
   var emailEl = document.getElementById("email");
@@ -136,11 +144,24 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   function appendMessage(msg){
     var div = document.createElement("div");
     div.className = "msg " + (msg.sender_type === "customer" ? "customer" : "agent");
-    div.textContent = msg.type === "image" ? "[图片消息]" : (msg.content || "");
+    if (msg.type === "image" && msg.attachment_id) {
+      div.className += " imageMsg";
+      var img = document.createElement("img");
+      img.className = "msgImage";
+      img.alt = "图片消息";
+      img.src = attachmentURL(msg.attachment_id);
+      img.onclick = function(){ openImage(img.src); };
+      div.appendChild(img);
+    } else {
+      div.textContent = msg.type === "image" ? "[图片消息]" : (msg.content || "");
+    }
     messagesEl.appendChild(div);
     messagesEl.scrollTop = messagesEl.scrollHeight;
     if (msg.sender_type === "agent" && msg.seq > lastReadSeq) lastReadSeq = msg.seq;
   }
+  function attachmentURL(id){ return api + "/api/v1/customer/attachments/" + encodeURIComponent(id) + "?token=" + encodeURIComponent(token); }
+  function openImage(src){ lightboxImgEl.src = src; lightboxEl.style.display = "flex"; lightboxEl.classList.remove("hidden"); }
+  lightboxEl.onclick = function(){ lightboxEl.style.display = "none"; lightboxEl.classList.add("hidden"); lightboxImgEl.src = ""; };
   function escapeHTML(text){ return String(text).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]); }); }
   function errorMessage(data, fallback){
     var code = data && data.error;

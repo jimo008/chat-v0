@@ -71,13 +71,21 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     .customer { align-self: flex-end; background: #2563eb; color: #fff; }
     .agent { align-self: flex-start; background: #fff; border: 1px solid #e2e8f0; color: #111827; }
     .system { align-self: center; color: #64748b; font-size: 12px; text-align: center; }
+    .system.success { color: #15803d; background: #dcfce7; border: 1px solid #86efac; border-radius: 8px; padding: 9px 10px; font-size: 13px; font-weight: 650; max-width: 86%; }
+    .system.error { color: #b91c1c; background: #fee2e2; border: 1px solid #fecaca; border-radius: 8px; padding: 9px 10px; font-size: 13px; font-weight: 650; max-width: 86%; }
     .auth { padding: 14px; border-top: 1px solid #e5e7eb; display: grid; gap: 8px; }
     .composer { padding: 10px; border-top: 1px solid #e5e7eb; display: grid; gap: 8px; background: #fff; }
     .row { display: flex; gap: 8px; }
     input { flex: 1; min-width: 0; height: 38px; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0 10px; font-size: 14px; }
-    button { height: 38px; border: 0; border-radius: 6px; padding: 0 12px; background: #2563eb; color: #fff; font-weight: 650; cursor: pointer; }
+    button { height: 38px; border: 0; border-radius: 6px; padding: 0 12px; background: #2563eb; color: #fff; font-weight: 650; cursor: pointer; transition: transform .12s ease, opacity .12s ease, filter .12s ease; }
+    button:hover:not(:disabled) { filter: brightness(.97); }
+    button:active:not(:disabled) { transform: translateY(1px) scale(.98); }
     button:disabled { opacity: .55; cursor: not-allowed; }
+    button.loading { position: relative; color: transparent; }
+    button.loading::after { content: ""; position: absolute; width: 14px; height: 14px; left: 50%; top: 50%; margin-left: -7px; margin-top: -7px; border: 2px solid rgba(255,255,255,.55); border-top-color: #fff; border-radius: 999px; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .secondary { background: #475569; }
+    .imageBtn { width: 44px; padding: 0; background: #475569; flex: 0 0 44px; }
     .emergency { background: #dc2626; width: 100%; }
     .muted { color: #64748b; font-size: 12px; }
     .hidden { display: none; }
@@ -93,7 +101,8 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
       <div class="row"><input id="code" placeholder="6 位验证码"><button id="verifyCode">进入客服</button></div>
     </div>
     <div id="composer" class="composer hidden">
-      <div class="row"><input id="text" placeholder="输入消息..."><button id="send">发送</button></div>
+      <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp" class="hidden">
+      <div class="row"><input id="text" placeholder="输入消息..."><button id="imageBtn" class="imageBtn" title="发送图片">图片</button><button id="send">发送</button></div>
       <button id="emergency" class="emergency">紧急呼叫客服</button>
     </div>
   </div>
@@ -110,9 +119,20 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var emailEl = document.getElementById("email");
   var codeEl = document.getElementById("code");
   var textEl = document.getElementById("text");
+  var imageInputEl = document.getElementById("imageInput");
+  var sendCodeBtn = document.getElementById("sendCode");
+  var verifyCodeBtn = document.getElementById("verifyCode");
+  var sendBtn = document.getElementById("send");
+  var imageBtn = document.getElementById("imageBtn");
+  var emergencyBtn = document.getElementById("emergency");
   var lastReadSeq = 0;
+  var codeTimer = null;
+  var codeCountdown = 0;
 
-  function addSystem(text){ messagesEl.innerHTML = '<div class="system">' + escapeHTML(text) + '</div>'; }
+  function addSystem(text, kind){
+    var cls = "system" + (kind ? " " + kind : "");
+    messagesEl.innerHTML = '<div class="' + cls + '">' + escapeHTML(text) + '</div>';
+  }
   function appendMessage(msg){
     var div = document.createElement("div");
     div.className = "msg " + (msg.sender_type === "customer" ? "customer" : "agent");
@@ -130,6 +150,38 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     if (code === "site_email_required") return "请输入正确邮箱";
     if (code === "rate_check_failed" || code === "code_store_failed") return "验证码服务暂时不可用，请稍后再试";
     return fallback;
+  }
+  function setLoading(btn, loading, text){
+    if (!btn) return;
+    if (text && !btn.dataset.originalText) btn.dataset.originalText = btn.textContent;
+    if (loading) {
+      btn.disabled = true;
+      btn.classList.add("loading");
+      if (text) btn.textContent = text;
+      return;
+    }
+    btn.disabled = false;
+    btn.classList.remove("loading");
+    if (btn.dataset.originalText) btn.textContent = btn.dataset.originalText;
+    delete btn.dataset.originalText;
+  }
+  function startCodeCountdown(seconds){
+    codeCountdown = seconds;
+    if (codeTimer) clearInterval(codeTimer);
+    sendCodeBtn.disabled = true;
+    sendCodeBtn.classList.remove("loading");
+    sendCodeBtn.textContent = codeCountdown + "秒后重发";
+    codeTimer = setInterval(function(){
+      codeCountdown--;
+      if (codeCountdown <= 0) {
+        clearInterval(codeTimer);
+        codeTimer = null;
+        sendCodeBtn.disabled = false;
+        sendCodeBtn.textContent = "发送验证码";
+        return;
+      }
+      sendCodeBtn.textContent = codeCountdown + "秒后重发";
+    }, 1000);
   }
   function authHeaders(){ return token ? {"Authorization":"Bearer " + token, "Content-Type":"application/json"} : {"Content-Type":"application/json"}; }
   function showAuthed(){ authEl.classList.add("hidden"); composerEl.classList.remove("hidden"); }
@@ -154,32 +206,53 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   }
   document.addEventListener("visibilitychange", sendRead);
   setInterval(function(){ if(token && !document.hidden) loadConversation(); }, 3000);
-  document.getElementById("sendCode").onclick = function(){
+  sendCodeBtn.onclick = function(){
+    setLoading(sendCodeBtn, true, "发送中");
     fetch(api + "/api/v1/customer/email/send-code", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,email:emailEl.value})})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
-      .then(function(){ addSystem("验证码已发送，请查收邮箱"); })
-      .catch(function(data){ addSystem(errorMessage(data, "验证码发送失败或过于频繁")); });
+      .then(function(data){ addSystem("验证码已发送，请打开邮箱查看 6 位验证码。", "success"); startCodeCountdown(data.resend_after_seconds || 60); })
+      .catch(function(data){ setLoading(sendCodeBtn, false); addSystem(errorMessage(data, "验证码发送失败或过于频繁"), "error"); if(data && data.error === "send_too_frequent") startCodeCountdown(60); });
   };
-  document.getElementById("verifyCode").onclick = function(){
+  verifyCodeBtn.onclick = function(){
+    setLoading(verifyCodeBtn, true, "进入中");
     fetch(api + "/api/v1/customer/email/verify", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,email:emailEl.value,code:codeEl.value,last_support_entry_type:"web",last_support_entry_url:entryURL})})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
       .then(function(data){ token = data.token; localStorage.setItem(tokenKey, token); loadConversation(); })
-      .catch(function(){ addSystem("验证码错误或已过期"); });
+      .catch(function(){ addSystem("验证码错误或已过期"); })
+      .finally(function(){ setLoading(verifyCodeBtn, false); });
   };
-  document.getElementById("send").onclick = function(){
+  sendBtn.onclick = function(){
     var content = textEl.value.trim();
     if (!content) return;
     textEl.value = "";
+    setLoading(sendBtn, true, "发送中");
     fetch(api + "/api/v1/customer/messages", {method:"POST", headers:authHeaders(), body:JSON.stringify({type:"text",content:content})})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
       .then(function(data){ appendMessage(data.message); })
-      .catch(function(){ addSystem("消息发送失败"); });
+      .catch(function(){ addSystem("消息发送失败"); textEl.value = content; })
+      .finally(function(){ setLoading(sendBtn, false); });
   };
-  document.getElementById("emergency").onclick = function(){
+  imageBtn.onclick = function(){ imageInputEl.click(); };
+  imageInputEl.onchange = function(){
+    var file = imageInputEl.files && imageInputEl.files[0];
+    imageInputEl.value = "";
+    if (!file) return;
+    var form = new FormData();
+    form.append("file", file);
+    setLoading(imageBtn, true, "上传中");
+    fetch(api + "/api/v1/customer/images", {method:"POST", headers: token ? {"Authorization":"Bearer " + token} : {}, body: form})
+      .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
+      .then(function(data){ appendMessage(data.message); })
+      .catch(function(){ addSystem("图片发送失败，请选择 JPG、PNG 或 WebP 图片"); })
+      .finally(function(){ setLoading(imageBtn, false); });
+  };
+  emergencyBtn.onclick = function(){
+    setLoading(emergencyBtn, true, "呼叫中");
     fetch(api + "/api/v1/customer/emergency/start", {method:"POST", headers:authHeaders()})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
       .then(function(){ addSystem("正在紧急呼叫客服..."); })
-      .catch(function(){ addSystem("当前暂无客服值班，您可以先发送消息。"); });
+      .catch(function(){ addSystem("当前暂无客服值班，您可以先发送消息。"); })
+      .finally(function(){ setLoading(emergencyBtn, false); });
   };
   window.addEventListener("message", function(ev){
     var data = ev.data || {};

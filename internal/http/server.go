@@ -38,6 +38,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("GET /api/v1/customer/me", s.requireCustomer(http.HandlerFunc(s.customerMe)))
 	mux.Handle("GET /api/v1/customer/conversation", s.requireCustomer(http.HandlerFunc(s.customerConversation)))
 	mux.Handle("POST /api/v1/customer/messages", s.requireCustomer(http.HandlerFunc(s.customerSendMessage)))
+	mux.Handle("POST /api/v1/customer/images", s.requireCustomer(http.HandlerFunc(s.customerUploadImage)))
 	mux.Handle("POST /api/v1/customer/read", s.requireCustomer(http.HandlerFunc(s.customerRead)))
 	mux.Handle("GET /api/v1/customer/emergency/status", s.requireCustomer(http.HandlerFunc(s.customerEmergencyStatus)))
 	mux.Handle("POST /api/v1/customer/emergency/start", s.requireCustomer(http.HandlerFunc(s.customerEmergencyStart)))
@@ -51,6 +52,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("GET /api/v1/agent/customers", s.requireAgent(http.HandlerFunc(s.agentListCustomers)))
 	mux.Handle("GET /api/v1/agent/conversations/{id}", s.requireAgent(http.HandlerFunc(s.agentGetConversation)))
 	mux.Handle("POST /api/v1/agent/conversations/{id}/messages", s.requireAgent(http.HandlerFunc(s.agentSendMessage)))
+	mux.Handle("POST /api/v1/agent/conversations/{id}/images", s.requireAgent(http.HandlerFunc(s.agentUploadImage)))
 	return s.withRequestLog(mux)
 }
 

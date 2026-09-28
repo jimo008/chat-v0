@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jimo008/chat-v0/internal/config"
+	"github.com/jimo008/chat-v0/internal/jobs"
 	"github.com/jimo008/chat-v0/internal/storage"
 )
 
@@ -30,10 +31,12 @@ func main() {
 
 	redisClient := storage.OpenRedis(cfg.Redis)
 	defer redisClient.Close()
+	_ = redisClient
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	runner := jobs.NewRunner(cfg, db, logger)
 	logger.Info("support worker started")
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -44,9 +47,7 @@ func main() {
 			logger.Info("support worker stopped")
 			return
 		case <-ticker.C:
-			// Job implementations are added in later phases: email batches,
-			// emergency expiry, scheduled duty, and retention cleanup.
-			logger.Debug("worker tick")
+			runner.Tick(ctx)
 		}
 	}
 }

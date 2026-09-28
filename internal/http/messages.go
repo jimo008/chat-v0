@@ -199,6 +199,56 @@ func (s *Server) insertTextMessage(ctx context.Context, tx *sql.Tx, siteID, conv
 	}, nil
 }
 
+func (s *Server) insertImageMessage(ctx context.Context, tx *sql.Tx, siteID, conversationID uint64, senderType string, customerID, agentID, attachmentID uint64) (messageDTO, error) {
+	seq, err := nextSequence(ctx, tx, "messages")
+	if err != nil {
+		return messageDTO{}, err
+	}
+	var senderCustomerID sql.NullInt64
+	var senderAgentID sql.NullInt64
+	if customerID != 0 {
+		senderCustomerID = sql.NullInt64{Int64: int64(customerID), Valid: true}
+	}
+	if agentID != 0 {
+		senderAgentID = sql.NullInt64{Int64: int64(agentID), Valid: true}
+	}
+	result, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO messages
+		   (site_id, conversation_id, sender_type, sender_customer_id, sender_agent_id, seq, type, attachment_id)
+		 VALUES (?, ?, ?, ?, ?, ?, 'image', ?)`,
+		siteID,
+		conversationID,
+		senderType,
+		senderCustomerID,
+		senderAgentID,
+		seq,
+		attachmentID,
+	)
+	if err != nil {
+		return messageDTO{}, err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return messageDTO{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE conversations SET last_message_id = ?, last_message_at = NOW(3), updated_at = NOW(3) WHERE id = ?`, id, conversationID); err != nil {
+		return messageDTO{}, err
+	}
+	return messageDTO{
+		ID:               uint64(id),
+		SiteID:           siteID,
+		ConversationID:   conversationID,
+		SenderType:       senderType,
+		SenderCustomerID: nullableIntValue(senderCustomerID),
+		SenderAgentID:    nullableIntValue(senderAgentID),
+		Seq:              seq,
+		Type:             "image",
+		Content:          "",
+		CreatedAt:        time.Now(),
+	}, nil
+}
+
 func parsePathUint(r *http.Request, name string) (uint64, error) {
 	return strconv.ParseUint(r.PathValue(name), 10, 64)
 }

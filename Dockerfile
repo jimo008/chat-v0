@@ -13,6 +13,7 @@ WORKDIR /app
 COPY --from=build /out/support-api /app/support-api
 COPY --from=build /out/support-worker /app/support-worker
 COPY migrations /app/migrations
+COPY --chown=nonroot:nonroot docker/uploads-placeholder /data/support-chat/uploads/.keep
 USER nonroot:nonroot
 EXPOSE 8080
 ENTRYPOINT ["/app/support-api"]

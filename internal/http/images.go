@@ -29,6 +29,7 @@ func (s *Server) customerUploadImage(w http.ResponseWriter, r *http.Request) {
 	}
 	attachment, err := s.storeUploadedImage(r, customer.SiteKey, "customer", customer.CustomerID)
 	if err != nil {
+		s.logger.Error("customer image upload", "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -84,6 +85,7 @@ func (s *Server) agentUploadImage(w http.ResponseWriter, r *http.Request) {
 	}
 	attachment, err := s.storeUploadedImage(r, siteKey, "agent", agent.AgentID)
 	if err != nil {
+		s.logger.Error("agent image upload", "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

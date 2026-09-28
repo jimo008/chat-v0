@@ -151,6 +151,16 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     if (code === "rate_check_failed" || code === "code_store_failed") return "验证码服务暂时不可用，请稍后再试";
     return fallback;
   }
+  function imageErrorMessage(data){
+    var code = data && data.error;
+    if (code === "unsupported_image_type") return "图片格式不支持，请选择 JPG、PNG 或 WebP 图片";
+    if (code === "file_too_large") return "图片太大，请选择 10MB 以内的图片";
+    if (code === "file_required" || code === "invalid_upload") return "请选择要发送的图片";
+    if (code === "storage_prepare_failed" || code === "storage_write_failed") return "图片存储失败，请联系网站管理员检查上传目录权限";
+    if (code === "customer_blocked") return "当前无法使用在线客服，请通过其他联系方式联系我们。";
+    if (code === "customer_not_found") return "登录已失效，请重新验证邮箱";
+    return "图片发送失败，请稍后再试";
+  }
   function setLoading(btn, loading, text){
     if (!btn) return;
     if (text && !btn.dataset.originalText) btn.dataset.originalText = btn.textContent;
@@ -243,7 +253,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     fetch(api + "/api/v1/customer/images", {method:"POST", headers: token ? {"Authorization":"Bearer " + token} : {}, body: form})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
       .then(function(data){ appendMessage(data.message); })
-      .catch(function(){ addSystem("图片发送失败，请选择 JPG、PNG 或 WebP 图片"); })
+      .catch(function(data){ addSystem(imageErrorMessage(data), "error"); })
       .finally(function(){ setLoading(imageBtn, false); });
   };
   emergencyBtn.onclick = function(){

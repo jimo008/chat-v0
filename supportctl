@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$ROOT_DIR/.env"
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  ./supportctl install
+  ./supportctl up
+  ./supportctl down
+  ./supportctl status
+  ./supportctl logs [service]
+  ./supportctl init-agent
+  ./supportctl site create
+  ./supportctl site list
+  ./supportctl site code
+
+V1 admin is CLI-first. Web admin is intentionally not included.
+USAGE
+}
+
+require_env() {
+  if [[ ! -f "$ENV_FILE" ]]; then
+    echo "Missing .env. Copy .env.example to .env and edit it first." >&2
+    exit 1
+  fi
+}
+
+compose() {
+  docker compose --env-file "$ENV_FILE" "$@"
+}
+
+cmd_install() {
+  if [[ ! -f "$ENV_FILE" ]]; then
+    cp "$ROOT_DIR/.env.example" "$ENV_FILE"
+    echo "Created .env from .env.example. Edit it before running ./supportctl up."
+    return
+  fi
+  echo ".env already exists. Nothing changed."
+}
+
+cmd_up() {
+  require_env
+  compose up -d --build
+}
+
+cmd_down() {
+  require_env
+  compose down
+}
+
+cmd_status() {
+  require_env
+  compose ps
+  echo
+  echo "Health:"
+  curl -fsS "${APP_BASE_URL:-http://localhost:8080}/healthz" || true
+  echo
+}
+
+cmd_logs() {
+  require_env
+  if [[ $# -gt 0 ]]; then
+    compose logs -f "$1"
+  else
+    compose logs -f
+  fi
+}
+
+cmd_init_agent() {
+  require_env
+  cat <<'MSG'
+init-agent is not wired yet.
+
+Planned behavior:
+  - prompt for username/email/password
+  - hash password server-side
+  - create the first agent account
+
+For now this command marks the intended operator workflow.
+MSG
+}
+
+cmd_site_create() {
+  require_env
+  cat <<'MSG'
+site create is not wired yet.
+
+Planned behavior:
+  - prompt for Site name
+  - create unique site_key
+  - print deployment code:
+    <script src="https://chat.example.com/widget.js" data-site="1001"></script>
+MSG
+}
+
+cmd_site_list() {
+  require_env
+  echo "site list is not wired yet."
+}
+
+cmd_site_code() {
+  require_env
+  echo "site code is not wired yet."
+}
+
+main() {
+  if [[ $# -lt 1 ]]; then
+    usage
+    exit 1
+  fi
+
+  case "$1" in
+    install) shift; cmd_install "$@" ;;
+    up) shift; cmd_up "$@" ;;
+    down) shift; cmd_down "$@" ;;
+    status) shift; cmd_status "$@" ;;
+    logs) shift; cmd_logs "$@" ;;
+    init-agent) shift; cmd_init_agent "$@" ;;
+    site)
+      shift
+      case "${1:-}" in
+        create) shift; cmd_site_create "$@" ;;
+        list) shift; cmd_site_list "$@" ;;
+        code) shift; cmd_site_code "$@" ;;
+        *) usage; exit 1 ;;
+      esac
+      ;;
+    *) usage; exit 1 ;;
+  esac
+}
+
+main "$@"

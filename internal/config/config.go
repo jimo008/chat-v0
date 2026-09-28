@@ -13,6 +13,7 @@ type Config struct {
 	AppEnv                      string
 	AppBaseURL                  string
 	HTTPAddr                    string
+	AdminToken                  string
 	MySQLDSN                    string
 	Redis                       storage.RedisConfig
 	UploadStoragePath           string
@@ -35,6 +36,7 @@ func Load() (Config, error) {
 		AppEnv:                      env("APP_ENV", "development"),
 		AppBaseURL:                  env("APP_BASE_URL", "http://localhost:8080"),
 		HTTPAddr:                    env("HTTP_ADDR", ":8080"),
+		AdminToken:                  env("ADMIN_TOKEN", ""),
 		MySQLDSN:                    env("MYSQL_DSN", "support:support_password@tcp(localhost:3306)/support_chat?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci"),
 		Redis: storage.RedisConfig{
 			Addr:     env("REDIS_ADDR", "localhost:6379"),

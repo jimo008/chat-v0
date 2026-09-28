@@ -142,7 +142,7 @@ class AgentForegroundService : Service() {
 
     private fun notifyNormal(text: String) {
         playNormalRing()
-        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(2, notification("agent-alert", text, ongoing = false, emergency = false, alert = true))
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(2, notification("agent-popup-v2", text, ongoing = false, emergency = false, alert = true))
     }
 
     private fun notifyEmergency(text: String) {
@@ -169,6 +169,7 @@ class AgentForegroundService : Service() {
             .setPriority(if (emergency || alert) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_HIGH)
             .setVibrate(if (emergency) longArrayOf(0, 700, 300, 700, 300, 700) else longArrayOf(0, 200, 100, 200))
             .setDefaults(Notification.DEFAULT_ALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setFullScreenIntent(pendingIntent, emergency || alert)
             .build()
     }
@@ -176,10 +177,11 @@ class AgentForegroundService : Service() {
     private fun createChannel() {
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(NotificationChannel("agent", "客服服务", NotificationManager.IMPORTANCE_HIGH))
-        manager.createNotificationChannel(NotificationChannel("agent-alert", "客户新消息", NotificationManager.IMPORTANCE_HIGH).apply {
-            description = "客户发送新消息时弹出提醒"
+        manager.createNotificationChannel(NotificationChannel("agent-popup-v2", "客户新消息弹窗", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "客户发送新消息时弹窗和亮屏提醒"
             enableVibration(true)
             vibrationPattern = longArrayOf(0, 300, 120, 300)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         })
         val emergencyChannel = NotificationChannel("emergency", "紧急呼叫", NotificationManager.IMPORTANCE_HIGH).apply {
             description = "紧急客服呼叫提醒"

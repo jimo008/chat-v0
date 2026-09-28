@@ -40,6 +40,7 @@ func (s *Server) customerXBoardLogin(w http.ResponseWriter, r *http.Request) {
 	emailOriginal := strings.TrimSpace(req.Email)
 	normalizedEmail := normalizeEmail(emailOriginal)
 	if siteKey == "" || xboardUserID == "" || normalizedEmail == "" {
+		s.logger.Info("xboard login missing identity fields", "site_key", siteKey, "xboard_user_id", xboardUserID, "email", emailOriginal)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "site_xboard_user_email_required"})
 		return
 	}
@@ -120,6 +121,7 @@ func (s *Server) customerXBoardLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.logger.Info("xboard login success", "site_key", site.SiteKey, "customer_id", customerID, "conversation_id", conversationID, "xboard_user_id", xboardUserID, "email", emailOriginal)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"customer": map[string]any{
 			"id":              customerID,

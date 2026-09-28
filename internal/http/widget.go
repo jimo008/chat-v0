@@ -31,13 +31,54 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
   iframe.style.zIndex = "2147483647";
   iframe.style.background = "transparent";
   iframe.allow = "clipboard-write";
+  var lastPostedIdentity = "";
+  function postIdentity(identity, source){
+    if (!identity) return;
+    var identityKey = "";
+    try { identityKey = JSON.stringify({id: identity.xboard_user_id || identity.id || identity.user_id || "", email: identity.email || ""}); } catch(e) {}
+    if (identityKey && identityKey === lastPostedIdentity) return;
+    lastPostedIdentity = identityKey;
+    console.info("[chat-v0] xboard identity detected from " + source, identity);
+    iframe.contentWindow.postMessage({type:"chat-v0:xboard-identity", identity: identity, source: source}, "%s");
+  }
+  function normalizeXBoardInfo(raw){
+    var root = raw && (raw.data || raw.user || raw);
+    if (!root) return null;
+    var id = root.xboard_user_id || root.user_id || root.id || root.uuid;
+    var email = root.email || root.mail || root.account || root.username;
+    if (!id || !email) return null;
+    return {
+      xboard_user_id: String(id),
+      email: String(email),
+      plan: root.plan || root.plan_name || root.group || "",
+      expire_time: root.expire_time || root.expired_at || root.expiredAt || null,
+      used_traffic: root.used_traffic || root.u || null,
+      all_traffic: root.all_traffic || root.transfer_enable || null,
+      raw_profile: raw
+    };
+  }
   function sendIdentity(){
     if (window.SupportChatIdentity) {
-      iframe.contentWindow.postMessage({type:"chat-v0:xboard-identity", identity: window.SupportChatIdentity}, "%s");
+      postIdentity(window.SupportChatIdentity, "SupportChatIdentity");
     }
   }
   iframe.addEventListener("load", sendIdentity);
   var lastIdentity = "";
+  var lastInfoCheck = 0;
+  function pollXBoardInfo(){
+    if (Date.now() - lastInfoCheck < 10000) return;
+    lastInfoCheck = Date.now();
+    fetch("/api/v1/user/info", {credentials:"include"}).then(function(r){
+      if (!r.ok) throw new Error("status " + r.status);
+      return r.json();
+    }).then(function(data){
+      var identity = normalizeXBoardInfo(data);
+      if (identity) postIdentity(identity, "/api/v1/user/info");
+      else console.info("[chat-v0] /api/v1/user/info returned without usable id/email", data);
+    }).catch(function(err){
+      console.info("[chat-v0] /api/v1/user/info unavailable", err && err.message ? err.message : err);
+    });
+  }
   setInterval(function(){
     var next = "";
     try { next = JSON.stringify(window.SupportChatIdentity || null); } catch(e) {}
@@ -45,7 +86,9 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
       lastIdentity = next;
       sendIdentity();
     }
+    pollXBoardInfo();
   }, 2000);
+  setTimeout(pollXBoardInfo, 1000);
   window.addEventListener("message", function(ev){
     if (ev.origin !== "%s") return;
     var data = ev.data || {};
@@ -176,7 +219,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var lastReadSeq = 0;
   var seenAgentSeq = Number(localStorage.getItem("chat_v0_seen_agent_seq_" + site) || "0");
   var unreadCount = 0;
-  var opened = localStorage.getItem("chat_v0_open_" + site) === "1";
+  var opened = false;
   var emergencySeconds = 0;
   var emergencyTimer = null;
   var emergencyStatusTimer = null;
@@ -296,13 +339,13 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     }, 1000);
   }
   function authHeaders(){ return token ? {"Authorization":"Bearer " + token, "Content-Type":"application/json"} : {"Content-Type":"application/json"}; }
+  function canMarkRead(){ return token && lastReadSeq && opened && !document.hidden && document.hasFocus(); }
   function setOpen(next){
     opened = next;
-    localStorage.setItem("chat_v0_open_" + site, opened ? "1" : "0");
     launcherEl.classList.toggle("hidden", opened);
     document.querySelector(".panel").classList.toggle("hidden", !opened);
     window.parent.postMessage({type:"chat-v0:resize", open: opened}, "*");
-    if (opened) {
+    if (opened && canMarkRead()) {
       unreadCount = 0;
       if (lastReadSeq) {
         seenAgentSeq = lastReadSeq;
@@ -333,7 +376,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
       (data.messages || []).forEach(appendMessage);
       if ((data.messages || []).length === 0) addSystem("可以开始聊天了");
       showAuthed();
-      if (opened) {
+      if (canMarkRead()) {
         if (lastReadSeq) {
           seenAgentSeq = lastReadSeq;
           localStorage.setItem("chat_v0_seen_agent_seq_" + site, String(seenAgentSeq));
@@ -344,10 +387,11 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     }).catch(function(){ addSystem("连接客服失败"); showAuth(); });
   }
   function sendRead(){
-    if (!token || !lastReadSeq || document.hidden || !opened) return;
+    if (!canMarkRead()) return;
     fetch(api + "/api/v1/customer/read", {method:"POST", headers:authHeaders(), body:JSON.stringify({up_to_seq:lastReadSeq})}).catch(function(){});
   }
   document.addEventListener("visibilitychange", sendRead);
+  window.addEventListener("focus", sendRead);
   setInterval(function(){ if(token) loadConversation(); }, 3000);
   sendCodeBtn.onclick = function(){
     setLoading(sendCodeBtn, true, "发送中");
@@ -460,12 +504,13 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     var data = ev.data || {};
     if (data.type !== "chat-v0:xboard-identity" || !data.identity) return;
     var id = data.identity;
-    fetch(api + "/api/v1/customer/xboard-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,xboard_user_id:String(id.xboard_user_id || id.id || id.user_id || ""),email:id.email || "",plan:id.plan || id.subscription || "",expire_time:id.expire_time || id.expired_at || null,used_traffic:id.used_traffic || null,all_traffic:id.all_traffic || null,raw_profile:id,last_support_entry_type:"web",last_support_entry_url:entryURL})})
+    console.info("[chat-v0] iframe received xboard identity", data.source || "unknown", id);
+    fetch(api + "/api/v1/customer/xboard-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,xboard_user_id:String(id.xboard_user_id || id.id || id.user_id || ""),email:id.email || "",plan:id.plan || id.subscription || "",expire_time:id.expire_time || id.expired_at || null,used_traffic:id.used_traffic || null,all_traffic:id.all_traffic || null,raw_profile:id.raw_profile || id,last_support_entry_type:"web",last_support_entry_url:entryURL})})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
-      .then(function(data){ token = data.token; localStorage.setItem(tokenKey, token); if (id.email) emailEl.value = id.email; loadConversation(); })
-      .catch(function(){ if(!token) showAuth(); });
+      .then(function(data){ console.info("[chat-v0] xboard login success", data.customer); token = data.token; localStorage.setItem(tokenKey, token); if (id.email) emailEl.value = id.email; loadConversation(); })
+      .catch(function(err){ console.info("[chat-v0] xboard login failed", err); if(!token) showAuth(); });
   });
-  setOpen(opened);
+  setOpen(false);
   loadConversation();
 })();
 </script>

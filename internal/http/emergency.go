@@ -66,6 +66,7 @@ func (s *Server) customerEmergencyStart(w http.ResponseWriter, r *http.Request) 
 	defer tx.Rollback()
 
 	var callID uint64
+	createdCall := false
 	err = tx.QueryRowContext(
 		r.Context(),
 		`SELECT id FROM emergency_calls WHERE customer_id = ? AND status = 'RINGING' ORDER BY id DESC LIMIT 1 FOR UPDATE`,
@@ -87,10 +88,25 @@ func (s *Server) customerEmergencyStart(w http.ResponseWriter, r *http.Request) 
 		}
 		id, _ := result.LastInsertId()
 		callID = uint64(id)
+		createdCall = true
 	} else if err != nil {
 		s.logger.Error("lookup emergency", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "emergency_lookup_failed"})
 		return
+	}
+
+	if createdCall {
+		message, err := s.insertTextMessage(r.Context(), tx, customer.SiteID, customer.ConversationID, "customer", customer.CustomerID, 0, "[紧急呼叫客服]")
+		if err != nil {
+			s.logger.Error("insert emergency message", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "emergency_message_failed"})
+			return
+		}
+		if _, _, err := createEvent(r.Context(), tx, customer.SiteID, "MESSAGE_CREATED", message); err != nil {
+			s.logger.Error("emergency message event", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "emergency_message_event_failed"})
+			return
+		}
 	}
 
 	if _, _, err := createEvent(r.Context(), tx, customer.SiteID, "EMERGENCY_STARTED", map[string]any{

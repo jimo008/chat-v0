@@ -17,6 +17,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,9 +29,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.File
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.UUID
@@ -123,7 +126,13 @@ fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (Custo
                 .onFailure { status = it.message ?: "加载失败" }
         }
     }
-    LaunchedEffect(Unit) { onStartService(); refresh() }
+    LaunchedEffect(Unit) {
+        onStartService()
+        while (true) {
+            refresh()
+            delay(3000)
+        }
+    }
 
     Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -142,9 +151,17 @@ fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (Custo
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(customers) { c ->
                 Card(Modifier.fillMaxWidth().clickable { onSelect(c) }) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text("[${c.siteName}] ${c.email}", fontWeight = FontWeight.SemiBold)
-                        Text("conversation #${c.conversationId}" + if (c.blocked) " · 已限制" else "", style = MaterialTheme.typography.bodySmall)
+                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("[${c.siteName}] ${c.email}", fontWeight = FontWeight.SemiBold)
+                            Text(lastPreview(c), style = MaterialTheme.typography.bodySmall, color = Color(0xFF475569))
+                            Text("conversation #${c.conversationId}" + if (c.blocked) " · 已限制" else "", style = MaterialTheme.typography.labelSmall, color = Color(0xFF64748B))
+                        }
+                        if (c.ringingCount > 0) {
+                            RedBadge("呼叫 ${c.ringingCount}")
+                        } else if (c.unreadCount > 0) {
+                            RedBadge(c.unreadCount.toString())
+                        }
                     }
                 }
             }
@@ -160,6 +177,7 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
     var localMessages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
     var input by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("加载中") }
+    val listState = rememberLazyListState()
 
     fun refresh() {
         scope.launch {
@@ -211,6 +229,11 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
                 }
         }
     }
+    LaunchedEffect(localMessages.size) {
+        if (localMessages.isNotEmpty()) {
+            listState.animateScrollToItem(localMessages.lastIndex)
+        }
+    }
 
     Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -222,7 +245,7 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
             Button(onClick = { refresh() }) { Text("刷新") }
         }
         if (status.isNotBlank()) Text(status)
-        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(localMessages, key = { it.localKey }) { m ->
                 MessageBubble(m, prefs, onRetry = { sendText(m.content, m.localKey) })
             }
@@ -237,6 +260,19 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
             }) { Text("发送") }
         }
     }
+}
+
+@Composable
+fun RedBadge(text: String) {
+    Surface(color = Color(0xFFDC2626), contentColor = Color.White, shape = MaterialTheme.shapes.small) {
+        Text(text, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+    }
+}
+
+fun lastPreview(customer: CustomerItem): String {
+    if (customer.ringingCount > 0) return "正在紧急呼叫"
+    if (customer.lastMessage.isBlank()) return "暂无消息"
+    return customer.lastMessage
 }
 
 @Composable
@@ -274,12 +310,21 @@ fun MessageBubble(message: ChatMessage, prefs: AgentPrefs, onRetry: () -> Unit) 
 
 @Composable
 fun AttachmentImage(prefs: AgentPrefs, attachmentId: Long) {
+    val context = LocalContext.current
     var bitmap by remember(attachmentId) { mutableStateOf<Bitmap?>(null) }
     var failed by remember(attachmentId) { mutableStateOf(false) }
     LaunchedEffect(attachmentId) {
         runCatching {
             withContext(Dispatchers.IO) {
-                val bytes = AgentApi(prefs.baseUrl, prefs.token).attachmentBytes(attachmentId)
+                val cacheFile = attachmentCacheFile(context, attachmentId)
+                val bytes = if (cacheFile.exists() && cacheFile.length() > 0) {
+                    cacheFile.readBytes()
+                } else {
+                    val downloaded = AgentApi(prefs.baseUrl, prefs.token).attachmentBytes(attachmentId)
+                    cacheFile.parentFile?.mkdirs()
+                    cacheFile.writeBytes(downloaded)
+                    downloaded
+                }
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             }
         }.onSuccess { bitmap = it }.onFailure { failed = true }
@@ -290,6 +335,9 @@ fun AttachmentImage(prefs: AgentPrefs, attachmentId: Long) {
         else -> CircularProgressIndicator(Modifier.size(24.dp))
     }
 }
+
+fun attachmentCacheFile(context: android.content.Context, attachmentId: Long): File =
+    File(File(context.filesDir, "attachments"), "$attachmentId.img")
 
 fun formatTime(value: String): String {
     if (value.isBlank()) return "刚刚"

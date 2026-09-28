@@ -15,7 +15,7 @@ import (
 	"github.com/jimo008/chat-v0/internal/security"
 )
 
-const maxImageBytes = 10 << 20
+const maxImageBytes = 30 << 20
 
 func (s *Server) customerUploadImage(w http.ResponseWriter, r *http.Request) {
 	customer, ok := customerFromContext(r.Context())

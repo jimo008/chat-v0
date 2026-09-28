@@ -22,6 +22,7 @@ class AgentForegroundService : Service() {
     private lateinit var prefs: AgentPrefs
     private var webSocket: WebSocket? = null
     private var emergencyRingtone: Ringtone? = null
+    private var normalRingtone: Ringtone? = null
     private var syncJob: Job? = null
     private var reconnectJob: Job? = null
 
@@ -29,7 +30,7 @@ class AgentForegroundService : Service() {
         super.onCreate()
         prefs = AgentPrefs(this)
         createChannel()
-        startForeground(1, notification(text = "客服服务正在运行", ongoing = true))
+        startForeground(1, notification(text = "客服服务正在运行", ongoing = true, alert = false))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -109,7 +110,15 @@ class AgentForegroundService : Service() {
             val event = events.getJSONObject(i)
             prefs.lastSeq = maxOf(prefs.lastSeq, event.optLong("seq", prefs.lastSeq))
             when (event.optString("type")) {
-                "MESSAGE_CREATED" -> notifyNormal("新的客户消息")
+                "MESSAGE_CREATED" -> {
+                    val payload = event.optJSONObject("payload") ?: event.optJSONObject("payload_json")
+                    val conversationId = payload?.optLong("conversation_id", 0L) ?: 0L
+                    val content = when (payload?.optString("type")) {
+                        "image" -> "[图片消息]"
+                        else -> payload?.optString("content").orEmpty().ifBlank { "新的客户消息" }
+                    }
+                    notifyNormal(if (conversationId > 0) "#$conversationId $content" else content)
+                }
                 "EMERGENCY_STARTED" -> {
                     val payload = event.optJSONObject("payload") ?: event.optJSONObject("payload_json")
                     val email = payload?.optString("customer_email").orEmpty()
@@ -132,7 +141,8 @@ class AgentForegroundService : Service() {
     }
 
     private fun notifyNormal(text: String) {
-        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(2, notification("agent", text, ongoing = false, emergency = false))
+        playNormalRing()
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(2, notification("agent-alert", text, ongoing = false, emergency = false, alert = true))
     }
 
     private fun notifyEmergency(text: String) {
@@ -140,7 +150,7 @@ class AgentForegroundService : Service() {
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(3, notification("emergency", text, ongoing = false, emergency = true))
     }
 
-    private fun notification(channelId: String = "agent", text: String, ongoing: Boolean, emergency: Boolean = false): Notification {
+    private fun notification(channelId: String = "agent", text: String, ongoing: Boolean, emergency: Boolean = false, alert: Boolean = false): Notification {
         val intent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this,
@@ -155,16 +165,22 @@ class AgentForegroundService : Service() {
             .setContentIntent(pendingIntent)
             .setOngoing(ongoing)
             .setAutoCancel(!ongoing)
-            .setCategory(if (emergency) NotificationCompat.CATEGORY_CALL else NotificationCompat.CATEGORY_MESSAGE)
-            .setPriority(if (emergency) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_HIGH)
+            .setCategory(if (emergency || alert) NotificationCompat.CATEGORY_CALL else NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(if (emergency || alert) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_HIGH)
             .setVibrate(if (emergency) longArrayOf(0, 700, 300, 700, 300, 700) else longArrayOf(0, 200, 100, 200))
-            .setFullScreenIntent(pendingIntent, emergency)
+            .setDefaults(Notification.DEFAULT_ALL)
+            .setFullScreenIntent(pendingIntent, emergency || alert)
             .build()
     }
 
     private fun createChannel() {
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(NotificationChannel("agent", "客服服务", NotificationManager.IMPORTANCE_HIGH))
+        manager.createNotificationChannel(NotificationChannel("agent-alert", "客户新消息", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "客户发送新消息时弹出提醒"
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 300, 120, 300)
+        })
         val emergencyChannel = NotificationChannel("emergency", "紧急呼叫", NotificationManager.IMPORTANCE_HIGH).apply {
             description = "紧急客服呼叫提醒"
             enableVibration(true)
@@ -188,5 +204,15 @@ class AgentForegroundService : Service() {
     private fun stopEmergencyRing() {
         emergencyRingtone?.stop()
         emergencyRingtone = null
+    }
+
+    private fun playNormalRing() {
+        normalRingtone?.stop()
+        normalRingtone = RingtoneManager.getRingtone(this, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))?.also { it.play() }
+        scope.launch {
+            delay(3000)
+            normalRingtone?.stop()
+            normalRingtone = null
+        }
     }
 }

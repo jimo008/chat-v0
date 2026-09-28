@@ -25,6 +25,10 @@ type createSiteRequest struct {
 	Name string `json:"name"`
 }
 
+type renameSiteRequest struct {
+	Name string `json:"name"`
+}
+
 func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 	var req createSiteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -98,6 +102,36 @@ func (s *Server) listSites(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"sites": sites})
+}
+
+func (s *Server) renameSite(w http.ResponseWriter, r *http.Request) {
+	siteKey := strings.TrimSpace(r.PathValue("site_key"))
+	var req renameSiteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if siteKey == "" || name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "site_key_name_required"})
+		return
+	}
+	if len([]rune(name)) > 128 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name_too_long"})
+		return
+	}
+	result, err := s.db.ExecContext(r.Context(), `UPDATE sites SET name = ? WHERE site_key = ?`, name, siteKey)
+	if err != nil {
+		s.logger.Error("rename site", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "site_rename_failed"})
+		return
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "site_not_found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"site_key": siteKey, "name": name})
 }
 
 func (s *Server) createUniqueSiteKey(ctx context.Context) (string, error) {

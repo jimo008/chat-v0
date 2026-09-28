@@ -35,6 +35,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /api/v1/admin/agents/init", s.requireAdmin(http.HandlerFunc(s.initAgent)))
 	mux.Handle("POST /api/v1/admin/sites", s.requireAdmin(http.HandlerFunc(s.createSite)))
 	mux.Handle("GET /api/v1/admin/sites", s.requireAdmin(http.HandlerFunc(s.listSites)))
+	mux.Handle("PATCH /api/v1/admin/sites/{site_key}", s.requireAdmin(http.HandlerFunc(s.renameSite)))
 	mux.HandleFunc("POST /api/v1/customer/xboard-login", s.customerXBoardLogin)
 	mux.HandleFunc("POST /api/v1/customer/email/send-code", s.customerSendEmailCode)
 	mux.HandleFunc("POST /api/v1/customer/email/verify", s.customerVerifyEmailCode)

@@ -5,7 +5,10 @@ data class CustomerItem(
     val siteName: String,
     val email: String,
     val conversationId: Long,
-    val blocked: Boolean
+    val blocked: Boolean,
+    val unreadCount: Int = 0,
+    val ringingCount: Int = 0,
+    val lastMessage: String = ""
 )
 
 data class ChatMessage(

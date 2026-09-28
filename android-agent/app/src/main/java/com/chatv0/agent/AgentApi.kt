@@ -10,7 +10,7 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 class AgentApi(private val baseUrl: String, private val token: String = "") {
-    private val client = OkHttpClient.Builder().callTimeout(20, TimeUnit.SECONDS).build()
+    private val client = OkHttpClient.Builder().callTimeout(60, TimeUnit.SECONDS).build()
 
     fun login(login: String, password: String, deviceId: String): String {
         val json = JSONObject(mapOf("login" to login, "password" to password, "device_id" to deviceId))
@@ -25,7 +25,16 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
         val arr = getJson("/api/v1/agent/customers").optJSONArray("customers") ?: JSONArray()
         return (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
-            CustomerItem(o.getLong("id"), o.optString("site_name"), o.optString("email"), o.getLong("conversation_id"), o.optBoolean("blocked"))
+            CustomerItem(
+                o.getLong("id"),
+                o.optString("site_name"),
+                o.optString("email"),
+                o.getLong("conversation_id"),
+                o.optBoolean("blocked"),
+                o.optInt("unread_count"),
+                o.optInt("ringing_count"),
+                o.optString("last_message")
+            )
         }
     }
 
@@ -71,7 +80,10 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
             .post(body)
             .build()
         client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) error("上传失败: ${resp.code}")
+            if (!resp.isSuccessful) {
+                val code = runCatching { JSONObject(resp.body?.string().orEmpty()).optString("error") }.getOrDefault("")
+                error(imageError(code, resp.code))
+            }
         }
     }
 
@@ -107,4 +119,11 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
 
     private fun authHeaders(): Headers = Headers.Builder().add("Authorization", "Bearer $token").build()
     private fun jsonBody(json: JSONObject): RequestBody = json.toString().toRequestBody("application/json".toMediaType())
+    private fun imageError(code: String, status: Int): String = when (code) {
+        "file_too_large" -> "图片太大，请选择 30MB 以内的图片"
+        "unsupported_image_type" -> "图片格式不支持，请选择 JPG、PNG 或 WebP 图片"
+        "file_required", "invalid_upload" -> "请选择要发送的图片"
+        "storage_prepare_failed", "storage_write_failed" -> "图片存储失败，请检查服务器上传目录权限"
+        else -> "图片上传失败: $status"
+    }
 }

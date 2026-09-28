@@ -81,11 +81,13 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     * { box-sizing: border-box; }
     body { margin: 0; background: transparent; }
     .launcher { width: 118px; height: 48px; border: 0; border-radius: 999px; background: #2563eb; color: #fff; font-size: 15px; font-weight: 750; box-shadow: 0 10px 28px rgba(37,99,235,.35); position: relative; }
+    .launcher.notify { animation: shake .8s ease-in-out infinite; }
+    @keyframes shake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-3px); } 40% { transform: translateX(3px); } 60% { transform: translateX(-2px); } 80% { transform: translateX(2px); } }
     .badge { position: absolute; right: -4px; top: -5px; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: #ef4444; color: #fff; font-size: 12px; line-height: 20px; text-align: center; border: 2px solid #fff; }
     .panel { width: 100vw; height: 100vh; border: 1px solid #d7dde8; border-radius: 8px; overflow: hidden; background: #fff; box-shadow: 0 16px 50px rgba(15,23,42,.18); display: flex; flex-direction: column; }
     .header { height: 52px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; background: #0f172a; color: #fff; font-size: 15px; font-weight: 650; }
     .headerMain { display: flex; align-items: center; gap: 8px; }
-    .minBtn { width: 32px; height: 32px; padding: 0; background: rgba(255,255,255,.14); color: #fff; }
+    .minBtn { width: 34px; height: 34px; padding: 0; background: rgba(255,255,255,.16); color: #fff; font-size: 20px; line-height: 34px; }
     .site { font-size: 12px; color: #cbd5e1; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .messages { flex: 1; padding: 14px; overflow-y: auto; background: #f8fafc; display: flex; flex-direction: column; gap: 10px; }
     .msg { max-width: 82%; padding: 9px 10px; border-radius: 8px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
@@ -124,7 +126,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
 <body>
   <button id="launcher" class="launcher">在线客服<span id="badge" class="badge hidden">0</span></button>
   <div class="panel">
-    <div class="header"><div class="headerMain"><button id="minimize" class="minBtn" title="最小化">-</button><span>在线客服</span></div><span class="site">__SITE_NAME__</span></div>
+    <div class="header"><div class="headerMain"><button id="minimize" class="minBtn" title="最小化">×</button><span>在线客服</span></div><span class="site">__SITE_NAME__</span></div>
     <div id="messages" class="messages"><div class="system">正在初始化...</div></div>
     <div id="auth" class="auth hidden">
       <div class="muted">请输入邮箱验证后开始聊天。</div>
@@ -178,6 +180,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var emergencySeconds = 0;
   var emergencyTimer = null;
   var emergencyStatusTimer = null;
+  var emergencyActive = false;
   var codeTimer = null;
   var codeCountdown = 0;
 
@@ -235,7 +238,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     if (!value) return "刚刚";
     var d = new Date(value);
     if (isNaN(d.getTime())) return String(value).slice(11,16) || "刚刚";
-    return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+    return d.toLocaleTimeString("zh-CN", {hour:"2-digit", minute:"2-digit", hour12:false, timeZone:"Asia/Shanghai"});
   }
   function attachmentURL(id){ return api + "/api/v1/customer/attachments/" + encodeURIComponent(id) + "?token=" + encodeURIComponent(token); }
   function openImage(src){ lightboxImgEl.src = src; lightboxEl.style.display = "flex"; lightboxEl.classList.remove("hidden"); }
@@ -253,7 +256,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   function imageErrorMessage(data){
     var code = data && data.error;
     if (code === "unsupported_image_type") return "图片格式不支持，请选择 JPG、PNG 或 WebP 图片";
-    if (code === "file_too_large") return "图片太大，请选择 10MB 以内的图片";
+    if (code === "file_too_large") return "图片太大，请选择 30MB 以内的图片";
     if (code === "file_required" || code === "invalid_upload") return "请选择要发送的图片";
     if (code === "storage_prepare_failed" || code === "storage_write_failed") return "图片存储失败，请联系网站管理员检查上传目录权限";
     if (code === "customer_blocked") return "当前无法使用在线客服，请通过其他联系方式联系我们。";
@@ -312,10 +315,11 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   function updateBadge(){
     if (unreadCount > 0) { badgeEl.textContent = unreadCount > 99 ? "99+" : String(unreadCount); badgeEl.classList.remove("hidden"); }
     else { badgeEl.classList.add("hidden"); }
+    launcherEl.classList.toggle("notify", unreadCount > 0 && !opened);
   }
   launcherEl.onclick = function(){ setOpen(true); };
   minimizeBtn.onclick = function(){ setOpen(false); };
-  function showAuthed(){ authEl.classList.add("hidden"); composerEl.classList.remove("hidden"); }
+  function showAuthed(){ authEl.classList.add("hidden"); composerEl.classList.toggle("hidden", emergencyActive); }
   function showAuth(){ composerEl.classList.add("hidden"); authEl.classList.remove("hidden"); }
   function loadConversation(){
     if (!token) { showAuth(); addSystem("请先验证邮箱"); return; }
@@ -340,11 +344,11 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     }).catch(function(){ addSystem("连接客服失败"); showAuth(); });
   }
   function sendRead(){
-    if (!token || !lastReadSeq || document.hidden) return;
+    if (!token || !lastReadSeq || document.hidden || !opened) return;
     fetch(api + "/api/v1/customer/read", {method:"POST", headers:authHeaders(), body:JSON.stringify({up_to_seq:lastReadSeq})}).catch(function(){});
   }
   document.addEventListener("visibilitychange", sendRead);
-  setInterval(function(){ if(token && !document.hidden) loadConversation(); }, 3000);
+  setInterval(function(){ if(token) loadConversation(); }, 3000);
   sendCodeBtn.onclick = function(){
     setLoading(sendCodeBtn, true, "发送中");
     fetch(api + "/api/v1/customer/email/send-code", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,email:emailEl.value})})
@@ -413,6 +417,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
       .finally(function(){ setLoading(emergencyBtn, false); });
   };
   function startEmergencyCalling(){
+    emergencyActive = true;
     emergencySeconds = 0;
     composerEl.classList.add("hidden");
     emergencyStateEl.classList.remove("hidden");
@@ -426,6 +431,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     emergencyStatusTimer = setInterval(checkEmergencyStatus, 3000);
   }
   function stopEmergencyCalling(){
+    emergencyActive = false;
     if (emergencyTimer) clearInterval(emergencyTimer);
     if (emergencyStatusTimer) clearInterval(emergencyStatusTimer);
     emergencyTimer = null;

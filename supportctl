@@ -17,6 +17,7 @@ Usage:
   ./supportctl init-agent
   ./supportctl site create
   ./supportctl site list
+  ./supportctl site rename <site_key>
   ./supportctl site code <site_key>
 
 V1 admin is CLI-first. Web admin is intentionally not included.
@@ -175,6 +176,23 @@ cmd_site_list() {
   echo
 }
 
+cmd_site_rename() {
+  require_env
+  local site_key="${1:-}"
+  if [[ -z "$site_key" ]]; then
+    echo "Usage: ./supportctl site rename <site_key>" >&2
+    exit 1
+  fi
+  printf "New site name: "
+  read -r name
+  if [[ -z "$name" ]]; then
+    echo "Site name is required." >&2
+    exit 1
+  fi
+  api_curl PATCH "/api/v1/admin/sites/${site_key}" "{\"name\":\"$(json_escape "$name")\"}"
+  echo
+}
+
 cmd_site_code() {
   require_env
   local site_key="${1:-}"
@@ -205,6 +223,7 @@ main() {
       case "${1:-}" in
         create) shift; cmd_site_create "$@" ;;
         list) shift; cmd_site_list "$@" ;;
+        rename) shift; cmd_site_rename "$@" ;;
         code) shift; cmd_site_code "$@" ;;
         *) usage; exit 1 ;;
       esac

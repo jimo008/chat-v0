@@ -9,10 +9,27 @@ func (s *Server) agentListCustomers(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.QueryContext(
 		r.Context(),
 		`SELECT c.id, c.site_id, s.site_key, s.name, c.email_original, c.xboard_user_id, c.blocked,
-		        conv.id, conv.last_message_at
+		        conv.id, conv.last_message_at,
+		        COALESCE(unread.unread_count, 0),
+		        COALESCE(ringing.ringing_count, 0),
+		        lm.type,
+		        lm.content
 		 FROM customers c
 		 JOIN sites s ON s.id = c.site_id
 		 JOIN conversations conv ON conv.customer_id = c.id AND conv.site_id = c.site_id
+		 LEFT JOIN messages lm ON lm.id = conv.last_message_id
+		 LEFT JOIN (
+		   SELECT conversation_id, COUNT(*) AS unread_count
+		   FROM messages
+		   WHERE sender_type = 'customer' AND agent_read_at IS NULL
+		   GROUP BY conversation_id
+		 ) unread ON unread.conversation_id = conv.id
+		 LEFT JOIN (
+		   SELECT conversation_id, COUNT(*) AS ringing_count
+		   FROM emergency_calls
+		   WHERE status = 'RINGING'
+		   GROUP BY conversation_id
+		 ) ringing ON ringing.conversation_id = conv.id
 		 ORDER BY conv.last_message_at DESC, c.last_active_at DESC, c.id DESC
 		 LIMIT 200`,
 	)
@@ -35,11 +52,19 @@ func (s *Server) agentListCustomers(w http.ResponseWriter, r *http.Request) {
 			blocked        bool
 			conversationID uint64
 			lastMessageAt  sql.NullTime
+			unreadCount    uint64
+			ringingCount   uint64
+			lastType       sql.NullString
+			lastContent    sql.NullString
 		)
-		if err := rows.Scan(&customerID, &siteID, &siteKey, &siteName, &email, &xboardUserID, &blocked, &conversationID, &lastMessageAt); err != nil {
+		if err := rows.Scan(&customerID, &siteID, &siteKey, &siteName, &email, &xboardUserID, &blocked, &conversationID, &lastMessageAt, &unreadCount, &ringingCount, &lastType, &lastContent); err != nil {
 			s.logger.Error("scan agent customer", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "customer_scan_failed"})
 			return
+		}
+		lastMessage := nullableStringValue(lastContent)
+		if lastType.Valid && lastType.String == "image" {
+			lastMessage = "[图片消息]"
 		}
 		customers = append(customers, map[string]any{
 			"id":              customerID,
@@ -51,6 +76,9 @@ func (s *Server) agentListCustomers(w http.ResponseWriter, r *http.Request) {
 			"blocked":         blocked,
 			"conversation_id": conversationID,
 			"last_message_at": nullableTimeValue(lastMessageAt),
+			"last_message":    lastMessage,
+			"unread_count":    unreadCount,
+			"ringing_count":   ringingCount,
 		})
 	}
 	if err := rows.Err(); err != nil {

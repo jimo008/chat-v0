@@ -5,8 +5,8 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/joho/godotenv"
 	"github.com/jimo008/chat-v0/internal/storage"
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -33,11 +33,11 @@ func Load() (Config, error) {
 	_ = godotenv.Load()
 
 	cfg := Config{
-		AppEnv:                      env("APP_ENV", "development"),
-		AppBaseURL:                  env("APP_BASE_URL", "http://localhost:8080"),
-		HTTPAddr:                    env("HTTP_ADDR", ":8080"),
-		AdminToken:                  env("ADMIN_TOKEN", ""),
-		MySQLDSN:                    env("MYSQL_DSN", "support:support_password@tcp(localhost:3306)/support_chat?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci"),
+		AppEnv:     env("APP_ENV", "development"),
+		AppBaseURL: env("APP_BASE_URL", "http://localhost:8080"),
+		HTTPAddr:   env("HTTP_ADDR", ":8080"),
+		AdminToken: env("ADMIN_TOKEN", ""),
+		MySQLDSN:   env("MYSQL_DSN", "support:support_password@tcp(localhost:3306)/support_chat?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci"),
 		Redis: storage.RedisConfig{
 			Addr:     env("REDIS_ADDR", "localhost:6379"),
 			Password: env("REDIS_PASSWORD", ""),

@@ -113,6 +113,7 @@ fun LoginScreen(prefs: AgentPrefs, onLoggedIn: (String) -> Unit) {
         }, modifier = Modifier.fillMaxWidth()) { Text("登录并启动客服服务") }
         Text(status)
         Text("请在系统设置中允许通知、后台运行、自启动和电池无限制。", style = MaterialTheme.typography.bodySmall)
+        PermissionButtons()
     }
 }
 
@@ -151,6 +152,7 @@ fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (Custo
                 scope.launch { withContext(Dispatchers.IO) { runCatching { AgentApi(prefs.baseUrl, prefs.token).setEmergencyDuty(it) } } }
             })
         }
+        PermissionButtons()
         Text(status, style = MaterialTheme.typography.bodySmall)
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(customers) { c ->
@@ -171,6 +173,33 @@ fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (Custo
             }
         }
     }
+}
+
+@Composable
+fun PermissionButtons() {
+    val context = LocalContext.current
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(onClick = { openAppSettings(context) }, modifier = Modifier.weight(1f)) { Text("权限设置") }
+        OutlinedButton(onClick = { openFullScreenSettings(context) }, modifier = Modifier.weight(1f)) { Text("全屏弹窗") }
+    }
+}
+
+fun openAppSettings(context: android.content.Context) {
+    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+        .setData(Uri.parse("package:${context.packageName}"))
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    context.startActivity(intent)
+}
+
+fun openFullScreenSettings(context: android.content.Context) {
+    if (Build.VERSION.SDK_INT >= 34) {
+        val intent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT)
+            .setData(Uri.parse("package:${context.packageName}"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(intent) }.onFailure { openAppSettings(context) }
+        return
+    }
+    openAppSettings(context)
 }
 
 @Composable

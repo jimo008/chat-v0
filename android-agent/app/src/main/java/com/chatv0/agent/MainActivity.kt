@@ -178,9 +178,19 @@ fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (Custo
 @Composable
 fun PermissionButtons() {
     val context = LocalContext.current
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        OutlinedButton(onClick = { openAppSettings(context) }, modifier = Modifier.weight(1f)) { Text("权限设置") }
-        OutlinedButton(onClick = { openFullScreenSettings(context) }, modifier = Modifier.weight(1f)) { Text("全屏弹窗") }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        Button(onClick = {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                openAppSettings(context)
+            }
+        }, modifier = Modifier.fillMaxWidth()) { Text("允许通知") }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = { openAppSettings(context) }, modifier = Modifier.weight(1f)) { Text("权限设置") }
+            OutlinedButton(onClick = { openFullScreenSettings(context) }, modifier = Modifier.weight(1f)) { Text("全屏弹窗") }
+        }
     }
 }
 

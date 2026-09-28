@@ -90,6 +90,10 @@ func (s *Server) customerSendEmailCode(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.sendVerificationEmail(site.Name, emailOriginal, code); err != nil {
 		s.logger.Error("send verification email", "error", err)
+		if err.Error() == "smtp_not_configured" {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "smtp_not_configured"})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "email_send_failed"})
 		return
 	}

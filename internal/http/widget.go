@@ -1,6 +1,7 @@
 package http
 
 import (
+	"database/sql"
 	"fmt"
 	"html"
 	"net/http"
@@ -40,7 +41,15 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
-	site := html.EscapeString(r.URL.Query().Get("site"))
+	siteKey := strings.TrimSpace(r.URL.Query().Get("site"))
+	siteLabel := "在线客服"
+	if site, err := s.findSiteByKey(r.Context(), siteKey); err == nil {
+		siteLabel = site.Name
+	} else if err != sql.ErrNoRows {
+		s.logger.Error("widget site lookup", "error", err)
+	}
+	site := html.EscapeString(siteKey)
+	siteName := html.EscapeString(siteLabel)
 	entryURL := html.EscapeString(r.URL.Query().Get("entry_url"))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -76,7 +85,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
 </head>
 <body>
   <div class="panel">
-    <div class="header"><span>在线客服</span><span class="site">__SITE__</span></div>
+    <div class="header"><span>在线客服</span><span class="site">__SITE_NAME__</span></div>
     <div id="messages" class="messages"><div class="system">正在初始化...</div></div>
     <div id="auth" class="auth hidden">
       <div class="muted">请输入邮箱验证后开始聊天。</div>
@@ -113,6 +122,15 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     if (msg.sender_type === "agent" && msg.seq > lastReadSeq) lastReadSeq = msg.seq;
   }
   function escapeHTML(text){ return String(text).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]); }); }
+  function errorMessage(data, fallback){
+    var code = data && data.error;
+    if (code === "send_too_frequent") return "验证码发送过于频繁，请 60 秒后再试";
+    if (code === "smtp_not_configured" || code === "email_send_failed") return "验证码邮件发送失败，请联系网站管理员检查 SMTP 配置";
+    if (code === "site_not_found") return "客服站点不存在，请检查嵌入代码";
+    if (code === "site_email_required") return "请输入正确邮箱";
+    if (code === "rate_check_failed" || code === "code_store_failed") return "验证码服务暂时不可用，请稍后再试";
+    return fallback;
+  }
   function authHeaders(){ return token ? {"Authorization":"Bearer " + token, "Content-Type":"application/json"} : {"Content-Type":"application/json"}; }
   function showAuthed(){ authEl.classList.add("hidden"); composerEl.classList.remove("hidden"); }
   function showAuth(){ composerEl.classList.add("hidden"); authEl.classList.remove("hidden"); }
@@ -140,7 +158,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     fetch(api + "/api/v1/customer/email/send-code", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,email:emailEl.value})})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
       .then(function(){ addSystem("验证码已发送，请查收邮箱"); })
-      .catch(function(){ addSystem("验证码发送失败或过于频繁"); });
+      .catch(function(data){ addSystem(errorMessage(data, "验证码发送失败或过于频繁")); });
   };
   document.getElementById("verifyCode").onclick = function(){
     fetch(api + "/api/v1/customer/email/verify", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,email:emailEl.value,code:codeEl.value,last_support_entry_type:"web",last_support_entry_url:entryURL})})
@@ -178,6 +196,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
 </body>
 </html>`
 	page = strings.ReplaceAll(page, "__SITE__", site)
+	page = strings.ReplaceAll(page, "__SITE_NAME__", siteName)
 	page = strings.ReplaceAll(page, "__ENTRY_URL__", entryURL)
 	_, _ = w.Write([]byte(page))
 }

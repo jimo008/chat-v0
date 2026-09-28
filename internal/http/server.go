@@ -30,6 +30,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("GET /widget.js", s.widgetJS)
 	mux.HandleFunc("GET /widget/frame", s.widgetFrame)
+	mux.HandleFunc("GET /ws/agent", s.agentWebSocket)
 	mux.HandleFunc("GET /api/v1/version", s.version)
 	mux.Handle("POST /api/v1/admin/agents/init", s.requireAdmin(http.HandlerFunc(s.initAgent)))
 	mux.Handle("POST /api/v1/admin/sites", s.requireAdmin(http.HandlerFunc(s.createSite)))

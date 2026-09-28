@@ -56,6 +56,11 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := result.LastInsertId()
+	if _, err := s.db.ExecContext(r.Context(), `INSERT IGNORE INTO agent_site_access (agent_id, site_id) SELECT id, ? FROM agents`, id); err != nil {
+		s.logger.Error("grant site access", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "site_access_failed"})
+		return
+	}
 
 	writeJSON(w, http.StatusCreated, siteDTO{
 		ID:             uint64(id),

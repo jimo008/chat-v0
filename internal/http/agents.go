@@ -68,6 +68,11 @@ func (s *Server) initAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := result.LastInsertId()
+	if _, err := s.db.ExecContext(r.Context(), `INSERT IGNORE INTO agent_site_access (agent_id, site_id) SELECT ?, id FROM sites`, id); err != nil {
+		s.logger.Error("grant agent site access", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "agent_access_failed"})
+		return
+	}
 	writeJSON(w, http.StatusCreated, agentDTO{ID: uint64(id), Username: username, Email: email, CreatedAt: time.Now()})
 }
 

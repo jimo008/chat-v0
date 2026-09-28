@@ -46,10 +46,15 @@ func (s *Server) agentSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Event delivery will be enabled after the agent visibility model is explicit.
-	// For now /sync is a safe heartbeat endpoint that keeps emergency availability accurate.
+	latestSeq, events, err := s.agentEvents(r.Context(), agent.AgentID, afterSeq, 200)
+	if err != nil {
+		s.logger.Error("query sync events", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "sync_events_failed"})
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"latest_seq": afterSeq,
-		"events":     []any{},
+		"latest_seq": latestSeq,
+		"events":     events,
 	})
 }

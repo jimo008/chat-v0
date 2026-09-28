@@ -70,3 +70,12 @@ func reverseMessages(messages []map[string]any) {
 		messages[i], messages[j] = messages[j], messages[i]
 	}
 }
+
+type jsonRaw string
+
+func (r jsonRaw) MarshalJSON() ([]byte, error) {
+	if r == "" {
+		return []byte("null"), nil
+	}
+	return []byte(r), nil
+}

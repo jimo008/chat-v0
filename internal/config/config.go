@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/jimo008/chat-v0/internal/storage"
 	"github.com/joho/godotenv"
@@ -26,6 +27,7 @@ type Config struct {
 	AgentSyncIntervalSeconds    int
 	EmergencyDeviceAliveSeconds int
 	EmergencyExpireSeconds      int
+	RetentionCleanupEnabled     bool
 	Timezone                    string
 }
 
@@ -53,6 +55,7 @@ func Load() (Config, error) {
 		AgentSyncIntervalSeconds:    envInt("AGENT_SYNC_INTERVAL_SECONDS", 3),
 		EmergencyDeviceAliveSeconds: envInt("EMERGENCY_DEVICE_ALIVE_SECONDS", 60),
 		EmergencyExpireSeconds:      envInt("EMERGENCY_EXPIRE_SECONDS", 180),
+		RetentionCleanupEnabled:     envBool("RETENTION_CLEANUP_ENABLED", false),
 		Timezone:                    env("TZ", "Asia/Shanghai"),
 	}
 
@@ -82,4 +85,12 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+func envBool(key string, fallback bool) bool {
+	value := strings.ToLower(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value == "1" || value == "true" || value == "yes" || value == "on"
 }

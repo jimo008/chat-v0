@@ -4,7 +4,7 @@
 
 目标：多个网站通过一行 JavaScript 接入客服 Widget，未来 Android 加速器 App 也接入同一套客服系统。客服端只开发 Android App，通过 Foreground Service + WebSocket + 固定 3 秒 HTTP 增量同步保证尽可能可靠地接收普通消息和紧急呼叫。
 
-当前状态：技术设计完成，基础后端、Docker Compose、数据库 schema、`supportctl` CLI 正在开发中。
+当前状态：后端基础链路、Widget 基础聊天、Postal Worker、紧急呼叫状态机、Android Agent 基础工程正在开发中。
 
 ## 核心原则
 
@@ -42,3 +42,18 @@ Create a Site after the stack is ready:
 - [V1 技术设计](docs/V1_TECHNICAL_DESIGN.md)
 - [部署方案](DEPLOYMENT.md)
 - [开发说明](docs/DEVELOPMENT.md)
+
+## 已实现的基础能力
+
+- Site 创建和部署代码生成
+- 第一位客服账号初始化
+- 客服登录、token 鉴权、3 秒 `/sync`、Agent WebSocket
+- XBoard 可信登录和邮箱验证码登录
+- 客户/客服文字消息
+- 客户/客服图片上传基础版
+- 客户 READ 上报
+- 紧急呼叫发起、取消、接受、前台自动接通、超时过期
+- Postal 5 分钟未读邮件批次 Worker
+- 三个月消息和附件清理 Worker（默认关闭，需显式开启）
+- Web Widget 基础聊天界面
+- Android Agent App 基础工程

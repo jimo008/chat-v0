@@ -8,6 +8,8 @@ import (
 	"html"
 	"log/slog"
 	"net/smtp"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -35,6 +37,14 @@ func (r *Runner) Tick(ctx context.Context) {
 		r.logger.Error("process email batches", "error", err)
 	} else if processed > 0 {
 		r.logger.Info("processed email batches", "count", processed)
+	}
+
+	if r.cfg.RetentionCleanupEnabled {
+		if cleaned, err := r.CleanupExpiredMessages(ctx, 200); err != nil {
+			r.logger.Error("cleanup expired messages", "error", err)
+		} else if cleaned > 0 {
+			r.logger.Info("cleaned expired messages", "count", cleaned)
+		}
 	}
 }
 
@@ -327,4 +337,70 @@ func workerNextSequence(ctx context.Context, tx *sql.Tx, name string) (uint64, e
 		return 0, err
 	}
 	return seq, nil
+}
+
+func (r *Runner) CleanupExpiredMessages(ctx context.Context, limit int) (uint64, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(
+		ctx,
+		`SELECT m.id, a.storage_key, a.thumbnail_key
+		 FROM messages m
+		 LEFT JOIN attachments a ON a.id = m.attachment_id
+		 WHERE m.created_at < DATE_SUB(NOW(3), INTERVAL 3 MONTH)
+		 ORDER BY m.created_at ASC
+		 LIMIT ?
+		 FOR UPDATE`,
+		limit,
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	type expired struct {
+		MessageID    uint64
+		StorageKey   sql.NullString
+		ThumbnailKey sql.NullString
+	}
+	expiredMessages := make([]expired, 0)
+	for rows.Next() {
+		var item expired
+		if err := rows.Scan(&item.MessageID, &item.StorageKey, &item.ThumbnailKey); err != nil {
+			return 0, err
+		}
+		expiredMessages = append(expiredMessages, item)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, item := range expiredMessages {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM email_batch_messages WHERE message_id = ?`, item.MessageID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE conversations SET last_message_id = NULL WHERE last_message_id = ?`, item.MessageID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE id = ?`, item.MessageID); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	// File deletion happens after DB commit. A later storage reconciliation job can retry leftovers.
+	for _, item := range expiredMessages {
+		if item.StorageKey.Valid {
+			_ = os.Remove(filepath.Join(r.cfg.UploadStoragePath, filepath.FromSlash(item.StorageKey.String)))
+		}
+		if item.ThumbnailKey.Valid && item.ThumbnailKey.String != item.StorageKey.String {
+			_ = os.Remove(filepath.Join(r.cfg.UploadStoragePath, filepath.FromSlash(item.ThumbnailKey.String)))
+		}
+	}
+	return uint64(len(expiredMessages)), nil
 }

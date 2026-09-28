@@ -71,9 +71,30 @@ EMERGENCY_EXPIRE_SECONDS=180
 TZ=Asia/Shanghai
 ```
 
+## 首次部署顺序
+
+```bash
+git clone https://github.com/jimo008/chat-v0.git
+cd chat-v0
+chmod +x supportctl
+./supportctl install
+# edit .env
+./supportctl up
+./supportctl status
+./supportctl init-agent
+./supportctl site create
+```
+
+部署代码示例：
+
+```html
+<script src="https://chat.example.com/widget.js" data-site="st_xxxxxxxx"></script>
+```
+
 ## 部署原则
 
 - 不把密钥提交到 GitHub。
 - 数据库、上传文件、日志使用 Docker volume 或宿主机目录持久化。
+- `RETENTION_CLEANUP_ENABLED=false` 为默认值；确认备份和保留策略后再改为 `true`。
 - 重要状态以 MySQL 为事实来源，Redis 只做实时状态、缓存、队列和短期数据。
 - Postal 失败不能阻塞聊天 API，由 Worker 异步重试。

@@ -135,6 +135,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     fetch(api + "/api/v1/customer/read", {method:"POST", headers:authHeaders(), body:JSON.stringify({up_to_seq:lastReadSeq})}).catch(function(){});
   }
   document.addEventListener("visibilitychange", sendRead);
+  setInterval(function(){ if(token && !document.hidden) loadConversation(); }, 3000);
   document.getElementById("sendCode").onclick = function(){
     fetch(api + "/api/v1/customer/email/send-code", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,email:emailEl.value})})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })

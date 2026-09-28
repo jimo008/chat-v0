@@ -128,7 +128,6 @@ type storedAttachment struct {
 }
 
 func (s *Server) storeUploadedImage(r *http.Request, siteKey, uploaderType string, uploaderID uint64) (storedAttachment, error) {
-	r.Body = http.MaxBytesReader(nil, r.Body, maxImageBytes+1024)
 	if err := r.ParseMultipartForm(maxImageBytes + 1024); err != nil {
 		return storedAttachment{}, fmt.Errorf("invalid_upload")
 	}

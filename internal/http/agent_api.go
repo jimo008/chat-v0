@@ -3,6 +3,7 @@ package http
 import (
 	"net/http"
 	"strconv"
+	"time"
 )
 
 func (s *Server) agentMe(w http.ResponseWriter, r *http.Request) {
@@ -65,8 +66,9 @@ func (s *Server) agentSync(w http.ResponseWriter, r *http.Request) {
 	events := make([]map[string]any, 0)
 	latestSeq := afterSeq
 	for rows.Next() {
-		var eventID, typ, payload, createdAt string
+		var eventID, typ, payload string
 		var seq, siteID uint64
+		var createdAt time.Time
 		if err := rows.Scan(&eventID, &seq, &siteID, &typ, &payload, &createdAt); err != nil {
 			s.logger.Error("scan sync event", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "sync_event_scan_failed"})

@@ -3,6 +3,8 @@ package com.chatv0.agent
 import android.content.Context
 import android.net.Uri
 import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -14,7 +16,7 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
         val json = JSONObject(mapOf("login" to login, "password" to password, "device_id" to deviceId))
         val req = Request.Builder().url("$baseUrl/api/v1/agent/login").post(jsonBody(json)).build()
         client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) error("登录失败: ${resp.code()}")
+            if (!resp.isSuccessful) error("登录失败: ${resp.code}")
             return JSONObject(resp.body?.string().orEmpty()).getString("token")
         }
     }
@@ -47,7 +49,7 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
     fun uploadImage(context: Context, conversationId: Long, uri: Uri) {
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("无法读取图片")
         val body = MultipartBody.Builder().setType(MultipartBody.FORM)
-            .addFormDataPart("file", "image", RequestBody.create(MediaType.get("application/octet-stream"), bytes))
+            .addFormDataPart("file", "image", bytes.toRequestBody("application/octet-stream".toMediaType()))
             .build()
         val req = Request.Builder()
             .url("$baseUrl/api/v1/agent/conversations/$conversationId/images")
@@ -55,7 +57,7 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
             .post(body)
             .build()
         client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) error("上传失败: ${resp.code()}")
+            if (!resp.isSuccessful) error("上传失败: ${resp.code}")
         }
     }
 
@@ -67,7 +69,7 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
     private fun getJson(path: String): JSONObject {
         val req = Request.Builder().url(baseUrl + path).headers(authHeaders()).build()
         client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) error("请求失败: ${resp.code()}")
+            if (!resp.isSuccessful) error("请求失败: ${resp.code}")
             return JSONObject(resp.body?.string().orEmpty())
         }
     }
@@ -75,12 +77,12 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
     private fun postJson(path: String, json: JSONObject): JSONObject {
         val req = Request.Builder().url(baseUrl + path).headers(authHeaders()).post(jsonBody(json)).build()
         client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) error("请求失败: ${resp.code()}")
+            if (!resp.isSuccessful) error("请求失败: ${resp.code}")
             val body = resp.body?.string().orEmpty()
             return if (body.isBlank()) JSONObject() else JSONObject(body)
         }
     }
 
     private fun authHeaders(): Headers = Headers.Builder().add("Authorization", "Bearer $token").build()
-    private fun jsonBody(json: JSONObject): RequestBody = RequestBody.create(MediaType.get("application/json"), json.toString())
+    private fun jsonBody(json: JSONObject): RequestBody = json.toString().toRequestBody("application/json".toMediaType())
 }

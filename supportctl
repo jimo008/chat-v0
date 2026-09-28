@@ -12,6 +12,7 @@ Usage:
   ./supportctl down
   ./supportctl status
   ./supportctl logs [service]
+  ./supportctl backup
   ./supportctl init-agent
   ./supportctl site create
   ./supportctl site list
@@ -101,6 +102,15 @@ cmd_logs() {
   fi
 }
 
+cmd_backup() {
+  require_env
+  mkdir -p "$ROOT_DIR/backups"
+  ts="$(date +%Y%m%d-%H%M%S)"
+  echo "Writing database backup to backups/mysql-${ts}.sql"
+  compose exec -T mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysqldump -uroot --single-transaction --routines --triggers "$MYSQL_DATABASE"' > "$ROOT_DIR/backups/mysql-${ts}.sql"
+  echo "Backup complete."
+}
+
 api_curl() {
   local method="$1"
   local path="$2"
@@ -179,6 +189,7 @@ main() {
     down) shift; cmd_down "$@" ;;
     status) shift; cmd_status "$@" ;;
     logs) shift; cmd_logs "$@" ;;
+    backup) shift; cmd_backup "$@" ;;
     init-agent) shift; cmd_init_agent "$@" ;;
     site)
       shift

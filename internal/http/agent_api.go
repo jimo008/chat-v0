@@ -3,7 +3,6 @@ package http
 import (
 	"net/http"
 	"strconv"
-	"time"
 )
 
 func (s *Server) agentMe(w http.ResponseWriter, r *http.Request) {
@@ -47,62 +46,10 @@ func (s *Server) agentSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := s.db.QueryContext(
-		r.Context(),
-		`SELECT event_id, seq, site_id, type, payload_json, created_at
-		 FROM events
-		 WHERE seq > ?
-		 ORDER BY seq ASC
-		 LIMIT 200`,
-		afterSeq,
-	)
-	if err != nil {
-		s.logger.Error("query sync events", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "sync_events_failed"})
-		return
-	}
-	defer rows.Close()
-
-	events := make([]map[string]any, 0)
-	latestSeq := afterSeq
-	for rows.Next() {
-		var eventID, typ, payload string
-		var seq, siteID uint64
-		var createdAt time.Time
-		if err := rows.Scan(&eventID, &seq, &siteID, &typ, &payload, &createdAt); err != nil {
-			s.logger.Error("scan sync event", "error", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "sync_event_scan_failed"})
-			return
-		}
-		if seq > latestSeq {
-			latestSeq = seq
-		}
-		events = append(events, map[string]any{
-			"event_id":   eventID,
-			"seq":        seq,
-			"site_id":    siteID,
-			"type":       typ,
-			"payload":    jsonRaw(payload),
-			"created_at": createdAt,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		s.logger.Error("iterate sync events", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "sync_event_iter_failed"})
-		return
-	}
-
+	// Event delivery will be enabled after the agent visibility model is explicit.
+	// For now /sync is a safe heartbeat endpoint that keeps emergency availability accurate.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"latest_seq": latestSeq,
-		"events":     events,
+		"latest_seq": afterSeq,
+		"events":     []any{},
 	})
-}
-
-type jsonRaw string
-
-func (r jsonRaw) MarshalJSON() ([]byte, error) {
-	if r == "" {
-		return []byte("null"), nil
-	}
-	return []byte(r), nil
 }

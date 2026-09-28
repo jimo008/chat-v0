@@ -42,6 +42,7 @@ Create a Site after the stack is ready:
 - [V1 技术设计](docs/V1_TECHNICAL_DESIGN.md)
 - [部署方案](DEPLOYMENT.md)
 - [开发说明](docs/DEVELOPMENT.md)
+- [API Reference](docs/API.md)
 
 ## 已实现的基础能力
 

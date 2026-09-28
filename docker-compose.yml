@@ -1,6 +1,6 @@
 services:
   support-api:
-    build: .
+    image: ${IMAGE_REF:-ghcr.io/jimo008/chat-v0:latest}
     env_file: .env
     command: ["/app/support-api"]
     depends_on:
@@ -15,7 +15,7 @@ services:
     restart: unless-stopped
 
   support-worker:
-    build: .
+    image: ${IMAGE_REF:-ghcr.io/jimo008/chat-v0:latest}
     env_file: .env
     entrypoint: ["/app/support-worker"]
     depends_on:

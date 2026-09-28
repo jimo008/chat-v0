@@ -29,6 +29,8 @@ chmod +x supportctl
 ./supportctl status
 ```
 
+`./supportctl up` pulls the prebuilt `ghcr.io/jimo008/chat-v0:latest` image. The server does not compile Go during normal deployment.
+
 Create a Site after the stack is ready:
 
 ```bash

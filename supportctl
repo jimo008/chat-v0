@@ -9,6 +9,7 @@ usage() {
 Usage:
   ./supportctl install
   ./supportctl up
+  ./supportctl build-local
   ./supportctl down
   ./supportctl status
   ./supportctl logs [service]
@@ -73,7 +74,14 @@ cmd_install() {
 
 cmd_up() {
   require_env
-  compose up -d --build
+  compose pull support-api support-worker
+  compose up -d
+}
+
+cmd_build_local() {
+  require_env
+  local image_ref="${IMAGE_REF:-chat-v0:local}"
+  docker build -t "$image_ref" "$ROOT_DIR"
 }
 
 cmd_down() {
@@ -186,6 +194,7 @@ main() {
   case "$1" in
     install) shift; cmd_install "$@" ;;
     up) shift; cmd_up "$@" ;;
+    build-local) shift; cmd_build_local "$@" ;;
     down) shift; cmd_down "$@" ;;
     status) shift; cmd_status "$@" ;;
     logs) shift; cmd_logs "$@" ;;

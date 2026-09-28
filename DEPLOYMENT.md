@@ -1,6 +1,6 @@
 # Deployment Plan
 
-V1 的部署目标是：任意一台普通 Linux 服务器，通过 GitHub 仓库 + Docker Compose + 交互式命令完成一键部署。
+V1 的部署目标是：GitHub Actions 预先编译 Docker 镜像，任意一台普通 Linux 服务器只负责拉取镜像 + Docker Compose 运行。
 
 ## 目标服务器要求
 
@@ -16,12 +16,26 @@ V1 的部署目标是：任意一台普通 Linux 服务器，通过 GitHub 仓�
 ```text
 server
   reverse proxy / TLS
-  support-api       Go Backend
-  support-worker    Email / cleanup / background jobs
+  support-api       prebuilt GHCR image
+  support-worker    same prebuilt GHCR image, different entrypoint
   mysql             MySQL 8
   redis             Redis
   uploads volume    local image storage
 ```
+
+默认镜像：
+
+```text
+ghcr.io/jimo008/chat-v0:latest
+```
+
+仓库为私有时，服务器需要先登录 GHCR：
+
+```bash
+echo 'YOUR_GITHUB_TOKEN' | docker login ghcr.io -u jimo008 --password-stdin
+```
+
+Token 至少需要能读取该私有包。如果镜像包设为公开，则不需要登录。
 
 ## 计划中的命令
 
@@ -83,6 +97,12 @@ chmod +x supportctl
 ./supportctl status
 ./supportctl init-agent
 ./supportctl site create
+```
+
+`./supportctl up` 会执行 `docker compose pull support-api support-worker`，再启动服务；不会在服务器上编译 Go。只有开发调试时才使用：
+
+```bash
+./supportctl build-local
 ```
 
 部署代码示例：

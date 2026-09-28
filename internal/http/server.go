@@ -1,9 +1,11 @@
 package http
 
 import (
+	"crypto/subtle"
 	"database/sql"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -27,7 +29,25 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("GET /api/v1/version", s.version)
+	mux.Handle("POST /api/v1/admin/sites", s.requireAdmin(http.HandlerFunc(s.createSite)))
+	mux.Handle("GET /api/v1/admin/sites", s.requireAdmin(http.HandlerFunc(s.listSites)))
 	return s.withRequestLog(mux)
+}
+
+func (s *Server) requireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.AdminToken == "" {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "admin_token_not_configured"})
+			return
+		}
+		auth := r.Header.Get("Authorization")
+		token := strings.TrimPrefix(auth, "Bearer ")
+		if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.AdminToken)) != 1 {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) withRequestLog(next http.Handler) http.Handler {

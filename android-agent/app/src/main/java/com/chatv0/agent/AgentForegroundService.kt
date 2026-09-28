@@ -18,6 +18,8 @@ class AgentForegroundService : Service() {
     private lateinit var prefs: AgentPrefs
     private var webSocket: WebSocket? = null
     private var emergencyRingtone: Ringtone? = null
+    private var syncJob: Job? = null
+    private var reconnectJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -27,9 +29,9 @@ class AgentForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        scope.launch {
-            connectWebSocket()
-            syncLoop()
+        if (webSocket == null) connectWebSocket()
+        if (syncJob?.isActive != true) {
+            syncJob = scope.launch { syncLoop() }
         }
         return START_STICKY
     }
@@ -51,8 +53,14 @@ class AgentForegroundService : Service() {
         val req = Request.Builder().url(wsUrl).build()
         webSocket = client.newWebSocket(req, object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) { handleEventEnvelope(text) }
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { scheduleReconnect() }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { scheduleReconnect() }
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                this@AgentForegroundService.webSocket = null
+                scheduleReconnect()
+            }
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                this@AgentForegroundService.webSocket = null
+                scheduleReconnect()
+            }
         })
     }
 
@@ -84,7 +92,13 @@ class AgentForegroundService : Service() {
         }
     }
 
-    private fun scheduleReconnect() { scope.launch { delay(3000); connectWebSocket() } }
+    private fun scheduleReconnect() {
+        if (reconnectJob?.isActive == true) return
+        reconnectJob = scope.launch {
+            delay(3000)
+            if (webSocket == null) connectWebSocket()
+        }
+    }
 
     private fun notifyNormal(text: String) {
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(2, notification("agent", text, ongoing = false, emergency = false))

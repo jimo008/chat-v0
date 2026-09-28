@@ -21,10 +21,10 @@
 
 ## Build
 
-Use Android Studio or a server with Android SDK installed:
+Use Android Studio, GitHub Actions, or a server with Android SDK and Gradle installed:
 
 ```bash
-./gradlew :android-agent:app:assembleDebug
+gradle :android-agent:app:assembleDebug
 ```
 
 The generated APK will be under:
@@ -32,6 +32,8 @@ The generated APK will be under:
 ```text
 android-agent/app/build/outputs/apk/debug/
 ```
+
+GitHub Actions also includes a manual `Android Agent APK` workflow that uploads a debug APK artifact.
 
 ## Manual Test Checklist
 

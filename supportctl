@@ -101,18 +101,6 @@ cmd_logs() {
   fi
 }
 
-cmd_init_agent() {
-  require_env
-  cat <<'MSG'
-init-agent is not wired yet.
-
-Planned behavior:
-  - prompt for username/email/password
-  - hash password server-side
-  - create the first agent account
-MSG
-}
-
 api_curl() {
   local method="$1"
   local path="$2"
@@ -130,6 +118,25 @@ api_curl() {
 
 json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+cmd_init_agent() {
+  require_env
+  printf "Username: "
+  read -r username
+  printf "Email: "
+  read -r email
+  printf "Password: "
+  stty -echo
+  read -r password
+  stty echo
+  echo
+  if [[ -z "$username" || -z "$email" || -z "$password" ]]; then
+    echo "Username, email, and password are required." >&2
+    exit 1
+  fi
+  api_curl POST /api/v1/admin/agents/init "{\"username\":\"$(json_escape "$username")\",\"email\":\"$(json_escape "$email")\",\"password\":\"$(json_escape "$password")\"}"
+  echo
 }
 
 cmd_site_create() {

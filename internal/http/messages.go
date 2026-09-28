@@ -146,6 +146,7 @@ type messageDTO struct {
 	Seq              uint64    `json:"seq"`
 	Type             string    `json:"type"`
 	Content          string    `json:"content"`
+	AttachmentID     any       `json:"attachment_id"`
 	CreatedAt        time.Time `json:"created_at"`
 }
 
@@ -195,6 +196,7 @@ func (s *Server) insertTextMessage(ctx context.Context, tx *sql.Tx, siteID, conv
 		Seq:              seq,
 		Type:             "text",
 		Content:          content,
+		AttachmentID:     nil,
 		CreatedAt:        time.Now(),
 	}, nil
 }
@@ -245,6 +247,7 @@ func (s *Server) insertImageMessage(ctx context.Context, tx *sql.Tx, siteID, con
 		Seq:              seq,
 		Type:             "image",
 		Content:          "",
+		AttachmentID:     attachmentID,
 		CreatedAt:        time.Now(),
 	}, nil
 }

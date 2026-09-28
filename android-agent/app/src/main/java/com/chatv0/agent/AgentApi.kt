@@ -33,7 +33,7 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
         val arr = root.optJSONArray("messages") ?: JSONArray()
         val messages = (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
-            ChatMessage(o.getLong("id"), o.optString("sender_type"), o.optLong("seq"), o.optString("type"), o.optString("content"), o.optString("customer_read_at").ifBlank { null })
+            ChatMessage(o.getLong("id"), o.optString("sender_type"), o.optLong("seq"), o.optString("type"), o.optString("content"), o.optString("customer_read_at").ifBlank { null }, if (o.isNull("attachment_id")) null else o.optLong("attachment_id"))
         }
         return ConversationDetail(conv.getLong("id"), customer.optString("email"), site.optString("name"), customer.optBoolean("blocked"), messages)
     }

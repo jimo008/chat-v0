@@ -14,7 +14,8 @@ data class ChatMessage(
     val seq: Long,
     val type: String,
     val content: String,
-    val customerReadAt: String?
+    val customerReadAt: String?,
+    val attachmentId: Long?
 )
 
 data class ConversationDetail(

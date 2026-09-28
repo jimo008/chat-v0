@@ -2,6 +2,9 @@ package com.chatv0.agent
 
 import android.app.*
 import android.content.Intent
+import android.media.Ringtone
+import android.media.RingtoneManager
+import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
@@ -14,12 +17,13 @@ class AgentForegroundService : Service() {
     private val client = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
     private lateinit var prefs: AgentPrefs
     private var webSocket: WebSocket? = null
+    private var emergencyRingtone: Ringtone? = null
 
     override fun onCreate() {
         super.onCreate()
         prefs = AgentPrefs(this)
         createChannel()
-        startForeground(1, notification("客服服务正在运行", ongoing = true))
+        startForeground(1, notification(text = "客服服务正在运行", ongoing = true))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -34,6 +38,7 @@ class AgentForegroundService : Service() {
 
     override fun onDestroy() {
         webSocket?.close(1000, "service_destroy")
+        stopEmergencyRing()
         scope.cancel()
         super.onDestroy()
     }
@@ -82,24 +87,61 @@ class AgentForegroundService : Service() {
     private fun scheduleReconnect() { scope.launch { delay(3000); connectWebSocket() } }
 
     private fun notifyNormal(text: String) {
-        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(2, notification(text, ongoing = false))
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(2, notification("agent", text, ongoing = false, emergency = false))
     }
 
     private fun notifyEmergency(text: String) {
-        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(3, notification(text, ongoing = false))
+        startEmergencyRing()
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(3, notification("emergency", text, ongoing = false, emergency = true))
     }
 
-    private fun notification(text: String, ongoing: Boolean): Notification = NotificationCompat.Builder(this, "agent")
-        .setSmallIcon(android.R.drawable.sym_call_incoming)
-        .setContentTitle("Chat V0 客服")
-        .setContentText(text)
-        .setOngoing(ongoing)
-        .setPriority(NotificationCompat.PRIORITY_HIGH)
-        .build()
+    private fun notification(channelId: String = "agent", text: String, ongoing: Boolean, emergency: Boolean = false): Notification {
+        val intent = Intent(this, MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            if (emergency) 3 else 2,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Builder(this, channelId)
+            .setSmallIcon(android.R.drawable.sym_call_incoming)
+            .setContentTitle(if (emergency) "紧急客服呼叫" else "Chat V0 客服")
+            .setContentText(text)
+            .setContentIntent(pendingIntent)
+            .setOngoing(ongoing)
+            .setAutoCancel(!ongoing)
+            .setCategory(if (emergency) NotificationCompat.CATEGORY_CALL else NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(if (emergency) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_HIGH)
+            .setVibrate(if (emergency) longArrayOf(0, 700, 300, 700, 300, 700) else longArrayOf(0, 200, 100, 200))
+            .setFullScreenIntent(pendingIntent, emergency)
+            .build()
+    }
 
     private fun createChannel() {
-        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(
-            NotificationChannel("agent", "客服服务", NotificationManager.IMPORTANCE_HIGH)
-        )
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        manager.createNotificationChannel(NotificationChannel("agent", "客服服务", NotificationManager.IMPORTANCE_HIGH))
+        val emergencyChannel = NotificationChannel("emergency", "紧急呼叫", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "紧急客服呼叫提醒"
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 700, 300, 700, 300, 700)
+        }
+        manager.createNotificationChannel(emergencyChannel)
+    }
+
+    private fun startEmergencyRing() {
+        stopEmergencyRing()
+        emergencyRingtone = RingtoneManager.getRingtone(this, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))?.also {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) it.isLooping = true
+            it.play()
+        }
+        scope.launch {
+            delay(60000)
+            stopEmergencyRing()
+        }
+    }
+
+    private fun stopEmergencyRing() {
+        emergencyRingtone?.stop()
+        emergencyRingtone = null
     }
 }

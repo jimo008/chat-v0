@@ -10,12 +10,14 @@
 - Customer list
 - Conversation detail
 - Send text replies
+- Send image replies
 - Mark customer messages internally read
 - Emergency duty switch
 - Foreground Service
 - WebSocket event stream
 - Fixed 3-second `/api/v1/agent/sync` fallback
 - Normal and emergency notifications
+- Emergency call channel with ringtone/vibration
 
 ## Build
 
@@ -45,7 +47,5 @@ android-agent/app/build/outputs/apk/debug/
 
 ## Known Gaps
 
-- Emergency notification is not yet a full-screen incoming-call UI.
-- Image sending from Android Agent is not implemented in UI yet.
-- Runtime notification permission prompt can be made friendlier.
+- Emergency notification still needs real-device tuning for each vendor ROM.
 - Needs real-device testing across Huawei/Xiaomi/other Android variants.

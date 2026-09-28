@@ -1,8 +1,13 @@
 package com.chatv0.agent
 
+import android.Manifest
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
@@ -16,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -26,7 +32,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = AgentPrefs(this)
-        setContent { AgentApp(prefs) { startService(Intent(this, AgentForegroundService::class.java)) } }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1001)
+        }
+        setContent { AgentApp(prefs) { ContextCompat.startForegroundService(this, Intent(this, AgentForegroundService::class.java)) } }
     }
 
     override fun onResume() {
@@ -136,6 +145,7 @@ fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (Custo
 @Composable
 fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var detail by remember { mutableStateOf<ConversationDetail?>(null) }
     var input by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("加载中") }
@@ -148,6 +158,18 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
         }
     }
     LaunchedEffect(customer.conversationId) { refresh() }
+    val imageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            status = "图片上传中..."
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    AgentApi(prefs.baseUrl, prefs.token).uploadImage(context, customer.conversationId, uri)
+                }
+            }.onSuccess { refresh() }
+                .onFailure { status = it.message ?: "图片上传失败" }
+        }
+    }
 
     Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -167,6 +189,7 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(input, { input = it }, modifier = Modifier.weight(1f), placeholder = { Text("输入回复") })
+            OutlinedButton(onClick = { imageLauncher.launch("image/*") }) { Text("图片") }
             Button(onClick = {
                 val text = input.trim(); if (text.isBlank()) return@Button
                 input = ""

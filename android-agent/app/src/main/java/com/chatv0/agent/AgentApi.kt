@@ -1,5 +1,7 @@
 package com.chatv0.agent
 
+import android.content.Context
+import android.net.Uri
 import okhttp3.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -40,6 +42,21 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
 
     fun sendMessage(conversationId: Long, content: String) {
         postJson("/api/v1/agent/conversations/$conversationId/messages", JSONObject(mapOf("type" to "text", "content" to content)))
+    }
+
+    fun uploadImage(context: Context, conversationId: Long, uri: Uri) {
+        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("无法读取图片")
+        val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("file", "image", RequestBody.create(MediaType.get("application/octet-stream"), bytes))
+            .build()
+        val req = Request.Builder()
+            .url("$baseUrl/api/v1/agent/conversations/$conversationId/images")
+            .headers(authHeaders())
+            .post(body)
+            .build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) error("上传失败: ${resp.code()}")
+        }
     }
 
     fun markRead(conversationId: Long) { postJson("/api/v1/agent/conversations/$conversationId/read", JSONObject()) }

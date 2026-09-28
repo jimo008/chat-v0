@@ -40,7 +40,6 @@ services:
       - --collation-server=utf8mb4_unicode_ci
     volumes:
       - mysql-data:/var/lib/mysql
-      - ./migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot_password"]
       interval: 10s

@@ -11,6 +11,7 @@ import (
 
 	"github.com/jimo008/chat-v0/internal/config"
 	httpserver "github.com/jimo008/chat-v0/internal/http"
+	"github.com/jimo008/chat-v0/internal/migrations"
 	"github.com/jimo008/chat-v0/internal/storage"
 )
 
@@ -29,6 +30,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
+
+	if err := migrations.Run(context.Background(), db, "migrations"); err != nil {
+		logger.Error("run migrations", "error", err)
+		os.Exit(1)
+	}
 
 	redisClient := storage.OpenRedis(cfg.Redis)
 	defer redisClient.Close()

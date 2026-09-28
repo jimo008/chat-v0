@@ -30,14 +30,28 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
     }
 
     fun conversation(id: Long): ConversationDetail {
-        val root = getJson("/api/v1/agent/conversations/$id")
+        return parseConversation(conversationJson(id))
+    }
+
+    fun conversationJson(id: Long): JSONObject = getJson("/api/v1/agent/conversations/$id")
+
+    fun parseConversation(root: JSONObject): ConversationDetail {
         val conv = root.getJSONObject("conversation")
         val customer = conv.getJSONObject("customer")
         val site = conv.getJSONObject("site")
         val arr = root.optJSONArray("messages") ?: JSONArray()
         val messages = (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
-            ChatMessage(o.getLong("id"), o.optString("sender_type"), o.optLong("seq"), o.optString("type"), o.optString("content"), o.optString("customer_read_at").ifBlank { null }, if (o.isNull("attachment_id")) null else o.optLong("attachment_id"))
+            ChatMessage(
+                o.getLong("id"),
+                o.optString("sender_type"),
+                o.optLong("seq"),
+                o.optString("type"),
+                o.optString("content"),
+                o.optString("customer_read_at").ifBlank { null },
+                if (o.isNull("attachment_id")) null else o.optLong("attachment_id"),
+                o.optString("created_at")
+            )
         }
         return ConversationDetail(conv.getLong("id"), customer.optString("email"), site.optString("name"), customer.optBoolean("blocked"), messages)
     }
@@ -58,6 +72,14 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
             .build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) error("上传失败: ${resp.code}")
+        }
+    }
+
+    fun attachmentBytes(id: Long): ByteArray {
+        val req = Request.Builder().url("$baseUrl/api/v1/agent/attachments/$id").headers(authHeaders()).build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) error("图片加载失败: ${resp.code}")
+            return resp.body?.bytes() ?: error("图片为空")
         }
     }
 

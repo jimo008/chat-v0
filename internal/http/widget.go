@@ -23,21 +23,38 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
   iframe.style.position = "fixed";
   iframe.style.right = "18px";
   iframe.style.bottom = "18px";
-  iframe.style.width = "360px";
-  iframe.style.height = "560px";
+  iframe.style.width = "118px";
+  iframe.style.height = "48px";
   iframe.style.maxWidth = "calc(100vw - 24px)";
   iframe.style.maxHeight = "calc(100vh - 24px)";
   iframe.style.border = "0";
   iframe.style.zIndex = "2147483647";
   iframe.style.background = "transparent";
   iframe.allow = "clipboard-write";
-  iframe.addEventListener("load", function(){
+  function sendIdentity(){
     if (window.SupportChatIdentity) {
       iframe.contentWindow.postMessage({type:"chat-v0:xboard-identity", identity: window.SupportChatIdentity}, "%s");
     }
+  }
+  iframe.addEventListener("load", sendIdentity);
+  var lastIdentity = "";
+  setInterval(function(){
+    var next = "";
+    try { next = JSON.stringify(window.SupportChatIdentity || null); } catch(e) {}
+    if (next && next !== lastIdentity) {
+      lastIdentity = next;
+      sendIdentity();
+    }
+  }, 2000);
+  window.addEventListener("message", function(ev){
+    if (ev.origin !== "%s") return;
+    var data = ev.data || {};
+    if (data.type !== "chat-v0:resize") return;
+    iframe.style.width = data.open ? "360px" : "118px";
+    iframe.style.height = data.open ? "560px" : "48px";
   });
   document.body.appendChild(iframe);
-})();`, s.cfg.AppBaseURL, s.cfg.AppBaseURL)
+})();`, s.cfg.AppBaseURL, s.cfg.AppBaseURL, s.cfg.AppBaseURL)
 }
 
 func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
@@ -63,11 +80,19 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     :root { color-scheme: light; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     * { box-sizing: border-box; }
     body { margin: 0; background: transparent; }
+    .launcher { width: 118px; height: 48px; border: 0; border-radius: 999px; background: #2563eb; color: #fff; font-size: 15px; font-weight: 750; box-shadow: 0 10px 28px rgba(37,99,235,.35); position: relative; }
+    .badge { position: absolute; right: -4px; top: -5px; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: #ef4444; color: #fff; font-size: 12px; line-height: 20px; text-align: center; border: 2px solid #fff; }
     .panel { width: 100vw; height: 100vh; border: 1px solid #d7dde8; border-radius: 8px; overflow: hidden; background: #fff; box-shadow: 0 16px 50px rgba(15,23,42,.18); display: flex; flex-direction: column; }
     .header { height: 52px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; background: #0f172a; color: #fff; font-size: 15px; font-weight: 650; }
+    .headerMain { display: flex; align-items: center; gap: 8px; }
+    .minBtn { width: 32px; height: 32px; padding: 0; background: rgba(255,255,255,.14); color: #fff; }
     .site { font-size: 12px; color: #cbd5e1; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .messages { flex: 1; padding: 14px; overflow-y: auto; background: #f8fafc; display: flex; flex-direction: column; gap: 10px; }
     .msg { max-width: 82%; padding: 9px 10px; border-radius: 8px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+    .msgBody { white-space: pre-wrap; word-break: break-word; }
+    .msgMeta { margin-top: 5px; font-size: 11px; opacity: .76; display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
+    .agent .msgMeta { justify-content: flex-start; color: #64748b; }
+    .retryLink { border: 0; height: auto; padding: 0; background: transparent; color: #fecaca; font-size: 11px; font-weight: 700; }
     .customer { align-self: flex-end; background: #2563eb; color: #fff; }
     .agent { align-self: flex-start; background: #fff; border: 1px solid #e2e8f0; color: #111827; }
     .msg.imageMsg { padding: 4px; background: transparent; border: 0; }
@@ -90,13 +115,16 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     .secondary { background: #475569; }
     .imageBtn { width: 44px; padding: 0; background: #475569; flex: 0 0 44px; }
     .emergency { background: #dc2626; width: 100%; }
+    .emergencyState { border-top: 1px solid #fecaca; background: #fff1f2; color: #991b1b; padding: 10px; display: grid; gap: 8px; font-size: 13px; font-weight: 650; }
+    .cancelEmergency { background: #991b1b; width: 100%; }
     .muted { color: #64748b; font-size: 12px; }
     .hidden { display: none; }
   </style>
 </head>
 <body>
+  <button id="launcher" class="launcher">在线客服<span id="badge" class="badge hidden">0</span></button>
   <div class="panel">
-    <div class="header"><span>在线客服</span><span class="site">__SITE_NAME__</span></div>
+    <div class="header"><div class="headerMain"><button id="minimize" class="minBtn" title="最小化">-</button><span>在线客服</span></div><span class="site">__SITE_NAME__</span></div>
     <div id="messages" class="messages"><div class="system">正在初始化...</div></div>
     <div id="auth" class="auth hidden">
       <div class="muted">请输入邮箱验证后开始聊天。</div>
@@ -107,6 +135,10 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
       <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp" class="hidden">
       <div class="row"><input id="text" placeholder="输入消息..."><button id="imageBtn" class="imageBtn" title="发送图片">图片</button><button id="send">发送</button></div>
       <button id="emergency" class="emergency">紧急呼叫客服</button>
+    </div>
+    <div id="emergencyState" class="emergencyState hidden">
+      <div id="emergencyText">☎ 正在呼叫客服 0 秒</div>
+      <button id="cancelEmergency" class="cancelEmergency">取消呼叫</button>
     </div>
   </div>
   <div id="lightbox" class="hidden" style="position:fixed; inset:0; z-index:10; background:rgba(15,23,42,.82); display:none; align-items:center; justify-content:center; padding:18px;">
@@ -120,6 +152,9 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var tokenKey = "chat_v0_token_" + site;
   var token = localStorage.getItem(tokenKey) || "";
   var messagesEl = document.getElementById("messages");
+  var launcherEl = document.getElementById("launcher");
+  var badgeEl = document.getElementById("badge");
+  var minimizeBtn = document.getElementById("minimize");
   var lightboxEl = document.getElementById("lightbox");
   var lightboxImgEl = document.getElementById("lightboxImg");
   var authEl = document.getElementById("auth");
@@ -133,7 +168,16 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var sendBtn = document.getElementById("send");
   var imageBtn = document.getElementById("imageBtn");
   var emergencyBtn = document.getElementById("emergency");
+  var emergencyStateEl = document.getElementById("emergencyState");
+  var emergencyTextEl = document.getElementById("emergencyText");
+  var cancelEmergencyBtn = document.getElementById("cancelEmergency");
   var lastReadSeq = 0;
+  var seenAgentSeq = Number(localStorage.getItem("chat_v0_seen_agent_seq_" + site) || "0");
+  var unreadCount = 0;
+  var opened = localStorage.getItem("chat_v0_open_" + site) === "1";
+  var emergencySeconds = 0;
+  var emergencyTimer = null;
+  var emergencyStatusTimer = null;
   var codeTimer = null;
   var codeCountdown = 0;
 
@@ -144,6 +188,8 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   function appendMessage(msg){
     var div = document.createElement("div");
     div.className = "msg " + (msg.sender_type === "customer" ? "customer" : "agent");
+    var body = document.createElement("div");
+    body.className = "msgBody";
     if (msg.type === "image" && msg.attachment_id) {
       div.className += " imageMsg";
       var img = document.createElement("img");
@@ -151,13 +197,45 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
       img.alt = "图片消息";
       img.src = attachmentURL(msg.attachment_id);
       img.onclick = function(){ openImage(img.src); };
-      div.appendChild(img);
+      body.appendChild(img);
     } else {
-      div.textContent = msg.type === "image" ? "[图片消息]" : (msg.content || "");
+      body.textContent = msg.type === "image" ? "[图片消息]" : (msg.content || "");
     }
+    div.appendChild(body);
+    div.appendChild(messageMeta(msg));
     messagesEl.appendChild(div);
     messagesEl.scrollTop = messagesEl.scrollHeight;
-    if (msg.sender_type === "agent" && msg.seq > lastReadSeq) lastReadSeq = msg.seq;
+    if (msg.sender_type === "agent" && msg.seq > lastReadSeq) {
+      lastReadSeq = msg.seq;
+      if (!opened && msg.seq > seenAgentSeq) unreadCount++;
+    }
+    updateBadge();
+  }
+  function messageMeta(msg){
+    var meta = document.createElement("div");
+    meta.className = "msgMeta";
+    var time = document.createElement("span");
+    time.textContent = formatTime(msg.created_at);
+    meta.appendChild(time);
+    if (msg.sender_type === "customer") {
+      var state = document.createElement("span");
+      state.textContent = msg.local_status || "已发送";
+      meta.appendChild(state);
+      if (msg.local_status === "发送失败" && msg.retry) {
+        var retry = document.createElement("button");
+        retry.className = "retryLink";
+        retry.textContent = "重发";
+        retry.onclick = msg.retry;
+        meta.appendChild(retry);
+      }
+    }
+    return meta;
+  }
+  function formatTime(value){
+    if (!value) return "刚刚";
+    var d = new Date(value);
+    if (isNaN(d.getTime())) return String(value).slice(11,16) || "刚刚";
+    return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
   }
   function attachmentURL(id){ return api + "/api/v1/customer/attachments/" + encodeURIComponent(id) + "?token=" + encodeURIComponent(token); }
   function openImage(src){ lightboxImgEl.src = src; lightboxEl.style.display = "flex"; lightboxEl.classList.remove("hidden"); }
@@ -215,6 +293,28 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     }, 1000);
   }
   function authHeaders(){ return token ? {"Authorization":"Bearer " + token, "Content-Type":"application/json"} : {"Content-Type":"application/json"}; }
+  function setOpen(next){
+    opened = next;
+    localStorage.setItem("chat_v0_open_" + site, opened ? "1" : "0");
+    launcherEl.classList.toggle("hidden", opened);
+    document.querySelector(".panel").classList.toggle("hidden", !opened);
+    window.parent.postMessage({type:"chat-v0:resize", open: opened}, "*");
+    if (opened) {
+      unreadCount = 0;
+      if (lastReadSeq) {
+        seenAgentSeq = lastReadSeq;
+        localStorage.setItem("chat_v0_seen_agent_seq_" + site, String(seenAgentSeq));
+      }
+      updateBadge();
+      sendRead();
+    }
+  }
+  function updateBadge(){
+    if (unreadCount > 0) { badgeEl.textContent = unreadCount > 99 ? "99+" : String(unreadCount); badgeEl.classList.remove("hidden"); }
+    else { badgeEl.classList.add("hidden"); }
+  }
+  launcherEl.onclick = function(){ setOpen(true); };
+  minimizeBtn.onclick = function(){ setOpen(false); };
   function showAuthed(){ authEl.classList.add("hidden"); composerEl.classList.remove("hidden"); }
   function showAuth(){ composerEl.classList.add("hidden"); authEl.classList.remove("hidden"); }
   function loadConversation(){
@@ -225,10 +325,18 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     }).then(function(data){
       if (!data) return;
       messagesEl.innerHTML = "";
+      unreadCount = 0;
       (data.messages || []).forEach(appendMessage);
       if ((data.messages || []).length === 0) addSystem("可以开始聊天了");
       showAuthed();
-      sendRead();
+      if (opened) {
+        if (lastReadSeq) {
+          seenAgentSeq = lastReadSeq;
+          localStorage.setItem("chat_v0_seen_agent_seq_" + site, String(seenAgentSeq));
+        }
+        updateBadge();
+        sendRead();
+      }
     }).catch(function(){ addSystem("连接客服失败"); showAuth(); });
   }
   function sendRead(){
@@ -257,10 +365,29 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     if (!content) return;
     textEl.value = "";
     setLoading(sendBtn, true, "发送中");
+    var localKey = "local-" + Date.now();
+    var pendingEl = null;
+    var pending = {id:localKey, sender_type:"customer", type:"text", content:content, created_at:new Date().toISOString(), local_status:"发送中..."};
+    var originalAppendMessage = appendMessage;
+    appendMessage(pending);
+    pendingEl = messagesEl.lastElementChild;
     fetch(api + "/api/v1/customer/messages", {method:"POST", headers:authHeaders(), body:JSON.stringify({type:"text",content:content})})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
-      .then(function(data){ appendMessage(data.message); })
-      .catch(function(){ addSystem("消息发送失败"); textEl.value = content; })
+      .then(function(){ loadConversation(); })
+      .catch(function(){
+        pending.local_status = "发送失败";
+        pending.retry = function(){ textEl.value = content; sendBtn.click(); };
+        if (pendingEl) {
+          var replacement = document.createElement("div");
+          originalAppendMessage(pending);
+          replacement = messagesEl.lastElementChild;
+          messagesEl.insertBefore(replacement, pendingEl);
+          pendingEl.remove();
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        } else {
+          appendMessage(pending);
+        }
+      })
       .finally(function(){ setLoading(sendBtn, false); });
   };
   imageBtn.onclick = function(){ imageInputEl.click(); };
@@ -281,9 +408,47 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     setLoading(emergencyBtn, true, "呼叫中");
     fetch(api + "/api/v1/customer/emergency/start", {method:"POST", headers:authHeaders()})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
-      .then(function(){ addSystem("正在紧急呼叫客服..."); })
+      .then(function(){ startEmergencyCalling(); })
       .catch(function(){ addSystem("当前暂无客服值班，您可以先发送消息。"); })
       .finally(function(){ setLoading(emergencyBtn, false); });
+  };
+  function startEmergencyCalling(){
+    emergencySeconds = 0;
+    composerEl.classList.add("hidden");
+    emergencyStateEl.classList.remove("hidden");
+    emergencyTextEl.textContent = "☎ 正在呼叫客服 0 秒";
+    if (emergencyTimer) clearInterval(emergencyTimer);
+    emergencyTimer = setInterval(function(){
+      emergencySeconds++;
+      emergencyTextEl.textContent = "☎ 正在呼叫客服 " + emergencySeconds + " 秒";
+    }, 1000);
+    if (emergencyStatusTimer) clearInterval(emergencyStatusTimer);
+    emergencyStatusTimer = setInterval(checkEmergencyStatus, 3000);
+  }
+  function stopEmergencyCalling(){
+    if (emergencyTimer) clearInterval(emergencyTimer);
+    if (emergencyStatusTimer) clearInterval(emergencyStatusTimer);
+    emergencyTimer = null;
+    emergencyStatusTimer = null;
+    emergencyStateEl.classList.add("hidden");
+    if (token) composerEl.classList.remove("hidden");
+  }
+  function checkEmergencyStatus(){
+    if (!token) return;
+    fetch(api + "/api/v1/customer/emergency/status", {headers:authHeaders()})
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        if (data.call_status === "ACCEPTED") { stopEmergencyCalling(); addSystem("客服已接听紧急呼叫", "success"); }
+        if (data.call_status === "CANCELLED" || data.call_status === "EXPIRED") { stopEmergencyCalling(); addSystem("紧急呼叫已结束"); }
+      }).catch(function(){});
+  }
+  cancelEmergencyBtn.onclick = function(){
+    setLoading(cancelEmergencyBtn, true, "取消中");
+    fetch(api + "/api/v1/customer/emergency/cancel", {method:"POST", headers:authHeaders()})
+      .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
+      .then(function(){ stopEmergencyCalling(); addSystem("已取消紧急呼叫"); })
+      .catch(function(){ addSystem("取消呼叫失败，请稍后再试", "error"); })
+      .finally(function(){ setLoading(cancelEmergencyBtn, false); });
   };
   window.addEventListener("message", function(ev){
     var data = ev.data || {};
@@ -291,9 +456,10 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     var id = data.identity;
     fetch(api + "/api/v1/customer/xboard-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,xboard_user_id:String(id.xboard_user_id || id.id || id.user_id || ""),email:id.email || "",plan:id.plan || id.subscription || "",expire_time:id.expire_time || id.expired_at || null,used_traffic:id.used_traffic || null,all_traffic:id.all_traffic || null,raw_profile:id,last_support_entry_type:"web",last_support_entry_url:entryURL})})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
-      .then(function(data){ token = data.token; localStorage.setItem(tokenKey, token); loadConversation(); })
+      .then(function(data){ token = data.token; localStorage.setItem(tokenKey, token); if (id.email) emailEl.value = id.email; loadConversation(); })
       .catch(function(){ if(!token) showAuth(); });
   });
+  setOpen(opened);
   loadConversation();
 })();
 </script>

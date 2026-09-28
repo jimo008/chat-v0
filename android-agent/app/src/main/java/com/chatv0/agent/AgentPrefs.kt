@@ -25,6 +25,13 @@ class AgentPrefs(context: Context) {
         get() = prefs.getBoolean("accept_emergency", false)
         set(value) = prefs.edit().putBoolean("accept_emergency", value).apply()
 
+    fun cachedConversation(conversationId: Long): String =
+        prefs.getString("conversation_$conversationId", "") ?: ""
+
+    fun setCachedConversation(conversationId: Long, json: String) {
+        prefs.edit().putString("conversation_$conversationId", json).apply()
+    }
+
     fun clearAuth() {
         prefs.edit().remove("token").remove("last_seq").apply()
     }

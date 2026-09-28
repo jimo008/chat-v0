@@ -15,7 +15,10 @@ data class ChatMessage(
     val type: String,
     val content: String,
     val customerReadAt: String?,
-    val attachmentId: Long?
+    val attachmentId: Long?,
+    val createdAt: String,
+    val localStatus: String = "sent",
+    val localKey: String = id.toString()
 )
 
 data class ConversationDetail(

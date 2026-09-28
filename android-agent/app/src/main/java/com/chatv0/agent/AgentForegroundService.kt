@@ -13,6 +13,10 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 class AgentForegroundService : Service() {
+    companion object {
+        const val ACTION_STOP_RING = "com.chatv0.agent.STOP_RING"
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val client = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
     private lateinit var prefs: AgentPrefs
@@ -29,6 +33,10 @@ class AgentForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP_RING) {
+            stopEmergencyRing()
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(3)
+        }
         if (webSocket == null) connectWebSocket()
         if (syncJob?.isActive != true) {
             syncJob = scope.launch { syncLoop() }
@@ -43,6 +51,21 @@ class AgentForegroundService : Service() {
         stopEmergencyRing()
         scope.cancel()
         super.onDestroy()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        val restart = PendingIntent.getService(
+            this,
+            100,
+            Intent(this, AgentForegroundService::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        (getSystemService(ALARM_SERVICE) as AlarmManager).set(
+            AlarmManager.RTC_WAKEUP,
+            System.currentTimeMillis() + 1000,
+            restart
+        )
+        super.onTaskRemoved(rootIntent)
     }
 
     private fun connectWebSocket() {
@@ -87,7 +110,15 @@ class AgentForegroundService : Service() {
             prefs.lastSeq = maxOf(prefs.lastSeq, event.optLong("seq", prefs.lastSeq))
             when (event.optString("type")) {
                 "MESSAGE_CREATED" -> notifyNormal("新的客户消息")
-                "EMERGENCY_STARTED" -> notifyEmergency("紧急客服呼叫")
+                "EMERGENCY_STARTED" -> {
+                    val payload = event.optJSONObject("payload") ?: event.optJSONObject("payload_json")
+                    val email = payload?.optString("customer_email").orEmpty()
+                    notifyEmergency(if (email.isBlank()) "有客户正在紧急呼叫" else "$email 正在紧急呼叫")
+                }
+                "EMERGENCY_ACCEPTED", "EMERGENCY_CANCELLED", "EMERGENCY_EXPIRED" -> {
+                    stopEmergencyRing()
+                    (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(3)
+                }
             }
         }
     }

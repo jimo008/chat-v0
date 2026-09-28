@@ -1,6 +1,8 @@
 package com.chatv0.agent
 
 import android.Manifest
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -11,6 +13,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -18,6 +21,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -25,6 +30,10 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     private lateinit var prefs: AgentPrefs
@@ -40,6 +49,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        ContextCompat.startForegroundService(this, Intent(this, AgentForegroundService::class.java).setAction(AgentForegroundService.ACTION_STOP_RING))
         runCatching { AgentApi(prefs.baseUrl, prefs.token).setForeground(true) }
     }
 
@@ -147,17 +157,30 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var detail by remember { mutableStateOf<ConversationDetail?>(null) }
+    var localMessages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
     var input by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("加载中") }
 
     fun refresh() {
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { AgentApi(prefs.baseUrl, prefs.token).conversation(customer.conversationId) } }
-                .onSuccess { detail = it; status = ""; withContext(Dispatchers.IO) { runCatching { AgentApi(prefs.baseUrl, prefs.token).markRead(customer.conversationId) } } }
+            runCatching { withContext(Dispatchers.IO) {
+                val api = AgentApi(prefs.baseUrl, prefs.token)
+                val json = api.conversationJson(customer.conversationId)
+                prefs.setCachedConversation(customer.conversationId, json.toString())
+                api.parseConversation(json)
+            } }
+                .onSuccess { detail = it; localMessages = it.messages; status = ""; withContext(Dispatchers.IO) { runCatching { AgentApi(prefs.baseUrl, prefs.token).markRead(customer.conversationId) } } }
                 .onFailure { status = it.message ?: "加载失败" }
         }
     }
-    LaunchedEffect(customer.conversationId) { refresh() }
+    LaunchedEffect(customer.conversationId) {
+        val cached = prefs.cachedConversation(customer.conversationId)
+        if (cached.isNotBlank()) {
+            runCatching { AgentApi(prefs.baseUrl, prefs.token).parseConversation(JSONObject(cached)) }
+                .onSuccess { detail = it; localMessages = it.messages; status = "" }
+        }
+        refresh()
+    }
     val imageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
@@ -168,6 +191,24 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
                 }
             }.onSuccess { refresh() }
                 .onFailure { status = it.message ?: "图片上传失败" }
+        }
+    }
+
+    fun sendText(text: String, localKey: String = UUID.randomUUID().toString()) {
+        val existing = localMessages.any { it.localKey == localKey }
+        if (existing) {
+            localMessages = localMessages.map { if (it.localKey == localKey) it.copy(localStatus = "sending") else it }
+        } else {
+            val pending = ChatMessage(-System.currentTimeMillis(), "agent", 0, "text", text, null, null, "", "sending", localKey)
+            localMessages = localMessages + pending
+        }
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { AgentApi(prefs.baseUrl, prefs.token).sendMessage(customer.conversationId, text) }
+            }.onSuccess { refresh() }
+                .onFailure {
+                    localMessages = localMessages.map { if (it.localKey == localKey) it.copy(localStatus = "failed") else it }
+                }
         }
     }
 
@@ -182,9 +223,8 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
         }
         if (status.isNotBlank()) Text(status)
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(detail?.messages ?: emptyList()) { m ->
-                val who = if (m.senderType == "agent") "客服" else "客户"
-                Card(Modifier.fillMaxWidth()) { Text("$who：${if (m.type == "image") "[图片消息]" else m.content}", Modifier.padding(10.dp)) }
+            items(localMessages, key = { it.localKey }) { m ->
+                MessageBubble(m, prefs, onRetry = { sendText(m.content, m.localKey) })
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -193,10 +233,67 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
             Button(onClick = {
                 val text = input.trim(); if (text.isBlank()) return@Button
                 input = ""
-                scope.launch { withContext(Dispatchers.IO) { runCatching { AgentApi(prefs.baseUrl, prefs.token).sendMessage(customer.conversationId, text) } }; refresh() }
+                sendText(text)
             }) { Text("发送") }
         }
     }
+}
+
+@Composable
+fun MessageBubble(message: ChatMessage, prefs: AgentPrefs, onRetry: () -> Unit) {
+    val isMine = message.senderType == "agent"
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start) {
+        Column(horizontalAlignment = if (isMine) Alignment.End else Alignment.Start, modifier = Modifier.fillMaxWidth(0.82f)) {
+            Card(colors = CardDefaults.cardColors(containerColor = if (isMine) Color(0xFF2563EB) else Color.White)) {
+                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (message.type == "image" && message.attachmentId != null) {
+                        AttachmentImage(prefs, message.attachmentId)
+                    } else {
+                        Text(message.content, color = if (isMine) Color.White else Color(0xFF111827))
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(formatTime(message.createdAt), style = MaterialTheme.typography.labelSmall, color = if (isMine) Color(0xFFE0E7FF) else Color(0xFF64748B))
+                        if (isMine) {
+                            val state = when {
+                                message.localStatus == "sending" -> "发送中..."
+                                message.localStatus == "failed" -> "发送失败"
+                                message.customerReadAt != null -> "已读"
+                                else -> "已发送"
+                            }
+                            Text(state, style = MaterialTheme.typography.labelSmall, color = if (message.localStatus == "failed") Color(0xFFFFCDD2) else Color(0xFFE0E7FF))
+                        }
+                    }
+                }
+            }
+            if (message.localStatus == "failed") {
+                TextButton(onClick = onRetry) { Text("重发") }
+            }
+        }
+    }
+}
+
+@Composable
+fun AttachmentImage(prefs: AgentPrefs, attachmentId: Long) {
+    var bitmap by remember(attachmentId) { mutableStateOf<Bitmap?>(null) }
+    var failed by remember(attachmentId) { mutableStateOf(false) }
+    LaunchedEffect(attachmentId) {
+        runCatching {
+            withContext(Dispatchers.IO) {
+                val bytes = AgentApi(prefs.baseUrl, prefs.token).attachmentBytes(attachmentId)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            }
+        }.onSuccess { bitmap = it }.onFailure { failed = true }
+    }
+    when {
+        bitmap != null -> Image(bitmap!!.asImageBitmap(), contentDescription = "图片消息", modifier = Modifier.sizeIn(maxWidth = 180.dp, maxHeight = 180.dp))
+        failed -> Text("[图片加载失败]")
+        else -> CircularProgressIndicator(Modifier.size(24.dp))
+    }
+}
+
+fun formatTime(value: String): String {
+    if (value.isBlank()) return "刚刚"
+    return runCatching { OffsetDateTime.parse(value).format(DateTimeFormatter.ofPattern("HH:mm")) }.getOrDefault(value.take(16))
 }
 
 fun deviceId(context: android.content.Context): String = "android-" + Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)

@@ -19,9 +19,20 @@ func (s *Server) customerEmergencyStatus(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "emergency_status_failed"})
 		return
 	}
+	var callID uint64
+	var callStatus string
+	_ = s.db.QueryRowContext(
+		r.Context(),
+		`SELECT id, status FROM emergency_calls
+		 WHERE customer_id = ?
+		 ORDER BY id DESC LIMIT 1`,
+		customer.CustomerID,
+	).Scan(&callID, &callStatus)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"available": available && !customer.Blocked,
-		"reason":    emergencyReason(available, customer.Blocked),
+		"available":   available && !customer.Blocked,
+		"reason":      emergencyReason(available, customer.Blocked),
+		"call_id":     callID,
+		"call_status": callStatus,
 	})
 }
 
@@ -85,6 +96,7 @@ func (s *Server) customerEmergencyStart(w http.ResponseWriter, r *http.Request) 
 	if _, _, err := createEvent(r.Context(), tx, customer.SiteID, "EMERGENCY_STARTED", map[string]any{
 		"call_id":         callID,
 		"customer_id":     customer.CustomerID,
+		"customer_email":  customer.Email,
 		"conversation_id": customer.ConversationID,
 	}); err != nil {
 		s.logger.Error("emergency event", "error", err)

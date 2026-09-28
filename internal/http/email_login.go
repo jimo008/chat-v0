@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"mime"
 	"net/http"
 	"net/smtp"
 	"strings"
@@ -237,11 +238,11 @@ func (s *Server) sendVerificationEmail(siteName, to, code string) error {
 	subject := siteName + "客服验证码"
 	body := fmt.Sprintf("您的验证码是：%s\\n\\n10 分钟内有效，请勿转发给他人。", code)
 	msg := strings.Builder{}
-	msg.WriteString("From: " + fromName + " <" + fromAddress + ">\\r\\n")
-	msg.WriteString("To: " + to + "\\r\\n")
-	msg.WriteString("Subject: " + subject + "\\r\\n")
-	msg.WriteString("MIME-Version: 1.0\\r\\n")
-	msg.WriteString("Content-Type: text/plain; charset=UTF-8\\r\\n\\r\\n")
+	msg.WriteString("From: " + mime.QEncoding.Encode("UTF-8", fromName) + " <" + fromAddress + ">\r\n")
+	msg.WriteString("To: " + to + "\r\n")
+	msg.WriteString("Subject: " + mime.QEncoding.Encode("UTF-8", subject) + "\r\n")
+	msg.WriteString("MIME-Version: 1.0\r\n")
+	msg.WriteString("Content-Type: text/plain; charset=UTF-8\r\n\r\n")
 	msg.WriteString(body)
 	addr := fmt.Sprintf("%s:%d", s.cfg.PostalSMTPHost, s.cfg.PostalSMTPPort)
 	auth := smtp.PlainAuth("", s.cfg.PostalSMTPUser, s.cfg.PostalSMTPPassword, s.cfg.PostalSMTPHost)

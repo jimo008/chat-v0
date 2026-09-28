@@ -53,8 +53,11 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /api/v1/agent/emergency/{id}/accept", s.requireAgent(http.HandlerFunc(s.agentEmergencyAccept)))
 	mux.Handle("GET /api/v1/agent/customers", s.requireAgent(http.HandlerFunc(s.agentListCustomers)))
 	mux.Handle("GET /api/v1/agent/conversations/{id}", s.requireAgent(http.HandlerFunc(s.agentGetConversation)))
+	mux.Handle("POST /api/v1/agent/conversations/{id}/read", s.requireAgent(http.HandlerFunc(s.agentMarkConversationRead)))
 	mux.Handle("POST /api/v1/agent/conversations/{id}/messages", s.requireAgent(http.HandlerFunc(s.agentSendMessage)))
 	mux.Handle("POST /api/v1/agent/conversations/{id}/images", s.requireAgent(http.HandlerFunc(s.agentUploadImage)))
+	mux.Handle("POST /api/v1/agent/customers/{id}/block", s.requireAgent(http.HandlerFunc(s.agentBlockCustomer)))
+	mux.Handle("POST /api/v1/agent/customers/{id}/unblock", s.requireAgent(http.HandlerFunc(s.agentUnblockCustomer)))
 	return s.withRequestLog(mux)
 }
 

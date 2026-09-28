@@ -29,8 +29,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("GET /api/v1/version", s.version)
+	mux.Handle("POST /api/v1/admin/agents/init", s.requireAdmin(http.HandlerFunc(s.initAgent)))
 	mux.Handle("POST /api/v1/admin/sites", s.requireAdmin(http.HandlerFunc(s.createSite)))
 	mux.Handle("GET /api/v1/admin/sites", s.requireAdmin(http.HandlerFunc(s.listSites)))
+	mux.HandleFunc("POST /api/v1/agent/login", s.agentLogin)
 	return s.withRequestLog(mux)
 }
 

@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        ContextCompat.startForegroundService(this, Intent(this, AgentForegroundService::class.java).setAction(AgentForegroundService.ACTION_STOP_RING))
         runCatching { AgentApi(prefs.baseUrl, prefs.token).setForeground(true) }
     }
 
@@ -231,7 +232,6 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
                     detail = it
                     localMessages = it.messages
                     status = ""
-                    ContextCompat.startForegroundService(context, Intent(context, AgentForegroundService::class.java).setAction(AgentForegroundService.ACTION_STOP_RING))
                     withContext(Dispatchers.IO) { runCatching { AgentApi(prefs.baseUrl, prefs.token).markRead(customer.conversationId) } }
                 }
                 .onFailure { status = it.message ?: "加载失败" }

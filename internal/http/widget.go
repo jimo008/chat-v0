@@ -36,10 +36,10 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
   function postIdentity(identity, source){
     if (!identity) return;
     var identityKey = "";
-    try { identityKey = JSON.stringify({id: identity.xboard_user_id || identity.id || identity.user_id || "", email: identity.email || ""}); } catch(e) {}
+    try { identityKey = JSON.stringify({id: identity.xboard_user_id || identity.id || identity.user_id || identity.uuid || "", email: identity.email || ""}); } catch(e) {}
     if (identityKey && identityKey === lastPostedIdentity) return;
     lastPostedIdentity = identityKey;
-    console.info("[chat-v0] xboard identity detected from " + source, identity);
+    console.info("[chat-v0] xboard identity detected from " + source + " id=" + (identity.xboard_user_id || identity.id || identity.user_id || identity.uuid || "") + " email=" + (identity.email || ""), identity);
     iframe.contentWindow.postMessage({type:"chat-v0:xboard-identity", identity: identity, source: source}, "%s");
   }
   function normalizeXBoardInfo(raw){
@@ -79,6 +79,23 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
       v = String(v).replace(/^Bearer\s+/i, "").replace(/^"|"$/g, "");
       if (v && out.indexOf(v) === -1) out.push(v);
     }
+    function scanValue(v, depth){
+      if (!v || depth > 4) return;
+      if (typeof v === "string") {
+        var s = v.trim();
+        if (/^[A-Za-z0-9._~+/-]{16,}$/.test(s)) add(s);
+        if ((s[0] === "{" && s[s.length - 1] === "}") || (s[0] === "[" && s[s.length - 1] === "]")) {
+          try { scanValue(JSON.parse(s), depth + 1); } catch(e) {}
+        }
+        return;
+      }
+      if (typeof v !== "object") return;
+      for (var k in v) {
+        if (!Object.prototype.hasOwnProperty.call(v, k)) continue;
+        if (/token|auth/i.test(k)) add(v[k]);
+        scanValue(v[k], depth + 1);
+      }
+    }
     for (var i = 0; i < names.length; i++) {
       try { add(localStorage.getItem(names[i])); } catch(e) {}
       try { add(sessionStorage.getItem(names[i])); } catch(e) {}
@@ -87,6 +104,12 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
       for (var j = 0; j < localStorage.length; j++) {
         var key = localStorage.key(j);
         if (/token|auth/i.test(key || "")) add(localStorage.getItem(key));
+        scanValue(localStorage.getItem(key), 0);
+      }
+      for (var k = 0; k < sessionStorage.length; k++) {
+        var skey = sessionStorage.key(k);
+        if (/token|auth/i.test(skey || "")) add(sessionStorage.getItem(skey));
+        scanValue(sessionStorage.getItem(skey), 0);
       }
     } catch(e) {}
     return out;
@@ -554,9 +577,9 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     if (data.type !== "chat-v0:xboard-identity" || !data.identity) return;
     var id = data.identity;
     console.info("[chat-v0] iframe received xboard identity", data.source || "unknown", id);
-    fetch(api + "/api/v1/customer/xboard-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,xboard_user_id:String(id.xboard_user_id || id.id || id.user_id || ""),email:id.email || "",plan:id.plan || id.subscription || "",expire_time:id.expire_time || id.expired_at || null,used_traffic:id.used_traffic || null,all_traffic:id.all_traffic || null,raw_profile:id.raw_profile || id,last_support_entry_type:"web",last_support_entry_url:entryURL})})
+    fetch(api + "/api/v1/customer/xboard-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,xboard_user_id:String(id.xboard_user_id || id.id || id.user_id || id.uuid || ""),email:id.email || "",plan:id.plan || id.subscription || "",expire_time:id.expire_time || id.expired_at || null,used_traffic:id.used_traffic || null,all_traffic:id.all_traffic || null,raw_profile:id.raw_profile || id,last_support_entry_type:"web",last_support_entry_url:entryURL})})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
-      .then(function(data){ console.info("[chat-v0] xboard login success", data.customer); token = data.token; localStorage.setItem(tokenKey, token); if (id.email) emailEl.value = id.email; loadConversation(); })
+      .then(function(data){ console.info("[chat-v0] xboard login success", data.customer); token = data.token; localStorage.setItem(tokenKey, token); if (id.email) emailEl.value = id.email; showAuthed(); loadConversation(); })
       .catch(function(err){ console.info("[chat-v0] xboard login failed", err); if(!token) showAuth(); });
   });
   setOpen(false);

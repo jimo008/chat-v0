@@ -25,9 +25,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -359,6 +361,7 @@ fun AttachmentImage(prefs: AgentPrefs, attachmentId: Long) {
     val context = LocalContext.current
     var bitmap by remember(attachmentId) { mutableStateOf<Bitmap?>(null) }
     var failed by remember(attachmentId) { mutableStateOf(false) }
+    var preview by remember(attachmentId) { mutableStateOf(false) }
     LaunchedEffect(attachmentId) {
         runCatching {
             withContext(Dispatchers.IO) {
@@ -376,7 +379,31 @@ fun AttachmentImage(prefs: AgentPrefs, attachmentId: Long) {
         }.onSuccess { bitmap = it }.onFailure { failed = true }
     }
     when {
-        bitmap != null -> Image(bitmap!!.asImageBitmap(), contentDescription = "图片消息", modifier = Modifier.sizeIn(maxWidth = 180.dp, maxHeight = 180.dp))
+        bitmap != null -> {
+            Image(
+                bitmap!!.asImageBitmap(),
+                contentDescription = "图片消息",
+                modifier = Modifier
+                    .sizeIn(maxWidth = 180.dp, maxHeight = 180.dp)
+                    .clickable { preview = true }
+            )
+            if (preview) {
+                Dialog(onDismissRequest = { preview = false }) {
+                    Surface(color = Color.Black.copy(alpha = 0.92f), shape = MaterialTheme.shapes.medium) {
+                        Image(
+                            bitmap!!.asImageBitmap(),
+                            contentDescription = "图片原图",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .fillMaxHeight(0.86f)
+                                .padding(10.dp)
+                                .clickable { preview = false }
+                        )
+                    }
+                }
+            }
+        }
         failed -> Text("[图片加载失败]")
         else -> CircularProgressIndicator(Modifier.size(24.dp))
     }

@@ -265,6 +265,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var countedAgentSeqs = {};
   var opened = false;
   var lastUserActiveAt = 0;
+  var lastAgentArrivedAt = 0;
   var emergencySeconds = 0;
   var emergencyTimer = null;
   var emergencyStatusTimer = null;
@@ -298,6 +299,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     messagesEl.scrollTop = messagesEl.scrollHeight;
     if (msg.sender_type === "agent" && msg.seq > lastReadSeq) {
       lastReadSeq = msg.seq;
+      lastAgentArrivedAt = Date.now();
       if (!opened && msg.seq > seenAgentSeq && !countedAgentSeqs[msg.seq]) {
         countedAgentSeqs[msg.seq] = true;
         unreadCount++;
@@ -397,7 +399,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   document.addEventListener("pointerdown", noteUserActive, true);
   document.addEventListener("keydown", noteUserActive, true);
   function canMarkRead(){
-    return token && lastReadSeq && opened && !document.hidden && document.hasFocus() && Date.now() - lastUserActiveAt < 15000;
+    return token && lastReadSeq && opened && !document.hidden && document.hasFocus() && lastUserActiveAt >= lastAgentArrivedAt && Date.now() - lastUserActiveAt < 15000;
   }
   function setOpen(next){
     opened = next;

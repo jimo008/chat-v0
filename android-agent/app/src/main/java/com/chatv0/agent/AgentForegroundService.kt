@@ -38,9 +38,12 @@ class AgentForegroundService : Service() {
             stopEmergencyRing()
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(3)
         }
-        if (webSocket == null) connectWebSocket()
         if (syncJob?.isActive != true) {
-            syncJob = scope.launch { syncLoop() }
+            syncJob = scope.launch {
+                bootstrapLastSeq()
+                if (webSocket == null) connectWebSocket()
+                syncLoop()
+            }
         }
         return START_STICKY
     }
@@ -86,6 +89,24 @@ class AgentForegroundService : Service() {
                 scheduleReconnect()
             }
         })
+    }
+
+    private fun bootstrapLastSeq() {
+        if (prefs.lastSeq > 0L) return
+        val token = prefs.token
+        val baseUrl = prefs.baseUrl
+        if (token.isBlank() || baseUrl.isBlank()) return
+        val req = Request.Builder()
+            .url(baseUrl + "/api/v1/agent/sync?after_seq=0")
+            .header("Authorization", "Bearer " + token)
+            .build()
+        runCatching {
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return
+                val json = JSONObject(resp.body?.string().orEmpty())
+                if (json.has("latest_seq")) prefs.lastSeq = maxOf(prefs.lastSeq, json.optLong("latest_seq", 0L))
+            }
+        }
     }
 
     private suspend fun syncLoop() {

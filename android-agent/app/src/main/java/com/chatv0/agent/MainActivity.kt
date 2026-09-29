@@ -103,6 +103,7 @@ fun LoginScreen(prefs: AgentPrefs, onLoggedIn: (String) -> Unit) {
                         val token = AgentApi(cleanBase).login(login, password, deviceId(context))
                         prefs.baseUrl = cleanBase
                         prefs.login = login
+                        prefs.lastSeq = 0L
                         prefs.token = token
                         token
                     }

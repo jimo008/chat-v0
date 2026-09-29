@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
@@ -52,7 +53,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        ContextCompat.startForegroundService(this, Intent(this, AgentForegroundService::class.java).setAction(AgentForegroundService.ACTION_STOP_RING))
         runCatching { AgentApi(prefs.baseUrl, prefs.token).setForeground(true) }
     }
 
@@ -217,6 +217,7 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
     var input by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("加载中") }
     val listState = rememberLazyListState()
+    BackHandler { onBack() }
 
     fun refresh() {
         scope.launch {
@@ -226,7 +227,13 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
                 prefs.setCachedConversation(customer.conversationId, json.toString())
                 api.parseConversation(json)
             } }
-                .onSuccess { detail = it; localMessages = it.messages; status = ""; withContext(Dispatchers.IO) { runCatching { AgentApi(prefs.baseUrl, prefs.token).markRead(customer.conversationId) } } }
+                .onSuccess {
+                    detail = it
+                    localMessages = it.messages
+                    status = ""
+                    ContextCompat.startForegroundService(context, Intent(context, AgentForegroundService::class.java).setAction(AgentForegroundService.ACTION_STOP_RING))
+                    withContext(Dispatchers.IO) { runCatching { AgentApi(prefs.baseUrl, prefs.token).markRead(customer.conversationId) } }
+                }
                 .onFailure { status = it.message ?: "加载失败" }
         }
     }

@@ -2,6 +2,7 @@ package com.chatv0.agent
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -71,8 +72,10 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
 
     fun uploadImage(context: Context, conversationId: Long, uri: Uri) {
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("无法读取图片")
+        val mime = context.contentResolver.getType(uri)?.takeIf { it.isNotBlank() } ?: "application/octet-stream"
+        val filename = displayName(context, uri)
         val body = MultipartBody.Builder().setType(MultipartBody.FORM)
-            .addFormDataPart("file", "image", bytes.toRequestBody("application/octet-stream".toMediaType()))
+            .addFormDataPart("file", filename, bytes.toRequestBody(mime.toMediaType()))
             .build()
         val req = Request.Builder()
             .url("$baseUrl/api/v1/agent/conversations/$conversationId/images")
@@ -126,4 +129,17 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
         "storage_prepare_failed", "storage_write_failed" -> "图片存储失败，请检查服务器上传目录权限"
         else -> "图片上传失败: $status"
     }
+}
+
+private fun displayName(context: Context, uri: Uri): String {
+    context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst()) {
+            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (index >= 0) {
+                val name = cursor.getString(index)
+                if (!name.isNullOrBlank()) return name
+            }
+        }
+    }
+    return "image"
 }

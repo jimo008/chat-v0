@@ -91,6 +91,11 @@ func (s *Server) agentListCustomers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) agentGetConversation(w http.ResponseWriter, r *http.Request) {
+	agent, ok := agentFromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "agent_not_found"})
+		return
+	}
 	conversationID, err := parsePathUint(r, "id")
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_conversation_id"})
@@ -125,6 +130,11 @@ func (s *Server) agentGetConversation(w http.ResponseWriter, r *http.Request) {
 		s.logger.Error("agent conversation", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "conversation_failed"})
 		return
+	}
+	if accepted, err := s.acceptRingingForConversation(r.Context(), conversationID, agent.AgentID, agent.DeviceID); err != nil {
+		s.logger.Error("accept conversation emergency", "error", err)
+	} else if accepted > 0 {
+		s.logger.Info("accepted emergency from conversation open", "conversation_id", conversationID, "accepted", accepted)
 	}
 
 	rows, err := s.db.QueryContext(

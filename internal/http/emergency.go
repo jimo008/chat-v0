@@ -206,17 +206,7 @@ func (s *Server) agentDeviceForeground(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "foreground_failed"})
 		return
 	}
-	accepted := uint64(0)
-	if req.Foreground {
-		count, err := s.acceptAllRinging(r.Context(), agent.AgentID, agent.DeviceID)
-		if err != nil {
-			s.logger.Error("foreground accept all", "error", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "foreground_accept_failed"})
-			return
-		}
-		accepted = count
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"foreground": req.Foreground, "accepted_calls": accepted})
+	writeJSON(w, http.StatusOK, map[string]any{"foreground": req.Foreground, "accepted_calls": 0})
 }
 
 type agentDutyRequest struct {
@@ -298,6 +288,74 @@ func (s *Server) acceptEmergencyCall(ctx context.Context, callID, agentID, devic
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Server) acceptRingingForConversation(ctx context.Context, conversationID, agentID, deviceID uint64) (uint64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(
+		ctx,
+		`SELECT id, site_id
+		 FROM emergency_calls
+		 WHERE conversation_id = ? AND status = 'RINGING'
+		 FOR UPDATE`,
+		conversationID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	type call struct {
+		ID     uint64
+		SiteID uint64
+	}
+	calls := make([]call, 0)
+	for rows.Next() {
+		var c call
+		if err := rows.Scan(&c.ID, &c.SiteID); err != nil {
+			return 0, err
+		}
+		calls = append(calls, c)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, c := range calls {
+		if _, err := tx.ExecContext(
+			ctx,
+			`UPDATE emergency_calls
+			 SET status = 'ACCEPTED', accepted_by_agent_id = ?, accepted_by_device_id = ?, accepted_at = NOW(3)
+			 WHERE id = ? AND status = 'RINGING'`,
+			agentID,
+			deviceID,
+			c.ID,
+		); err != nil {
+			return 0, err
+		}
+		message, err := s.insertTextMessage(ctx, tx, c.SiteID, conversationID, "agent", 0, agentID, "客服已上线")
+		if err != nil {
+			return 0, err
+		}
+		if _, _, err := createEvent(ctx, tx, c.SiteID, "MESSAGE_CREATED", message); err != nil {
+			return 0, err
+		}
+		if _, _, err := createEvent(ctx, tx, c.SiteID, "EMERGENCY_ACCEPTED", map[string]any{
+			"call_id":         c.ID,
+			"agent_id":        agentID,
+			"device_id":       deviceID,
+			"conversation_id": conversationID,
+			"accepted_reason": "conversation_opened",
+		}); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return uint64(len(calls)), nil
 }
 
 func (s *Server) acceptAllRinging(ctx context.Context, agentID, deviceID uint64) (uint64, error) {

@@ -131,6 +131,7 @@ type storedAttachment struct {
 
 func (s *Server) storeUploadedImage(r *http.Request, siteKey, uploaderType string, uploaderID uint64) (storedAttachment, error) {
 	if err := r.ParseMultipartForm(maxImageBytes + 1024); err != nil {
+		s.logger.Error("parse multipart image upload", "error", err, "content_length", r.ContentLength, "content_type", r.Header.Get("Content-Type"), "site_key", siteKey, "uploader_type", uploaderType)
 		return storedAttachment{}, fmt.Errorf("invalid_upload")
 	}
 	file, header, err := r.FormFile("file")
@@ -144,10 +145,12 @@ func (s *Server) storeUploadedImage(r *http.Request, siteKey, uploaderType strin
 		return storedAttachment{}, fmt.Errorf("file_read_failed")
 	}
 	if len(data) == 0 || len(data) > maxImageBytes {
+		s.logger.Info("image upload size rejected", "size", len(data), "filename", header.Filename, "site_key", siteKey, "uploader_type", uploaderType)
 		return storedAttachment{}, fmt.Errorf("file_too_large")
 	}
 	mimeType, ext, ok := allowedImage(data, header.Filename)
 	if !ok {
+		s.logger.Info("image upload type rejected", "filename", header.Filename, "size", len(data), "detected", http.DetectContentType(data), "site_key", siteKey, "uploader_type", uploaderType)
 		return storedAttachment{}, fmt.Errorf("unsupported_image_type")
 	}
 

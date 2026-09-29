@@ -262,7 +262,9 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var lastReadSeq = 0;
   var seenAgentSeq = Number(localStorage.getItem("chat_v0_seen_agent_seq_" + site) || "0");
   var unreadCount = 0;
+  var countedAgentSeqs = {};
   var opened = false;
+  var lastUserActiveAt = 0;
   var emergencySeconds = 0;
   var emergencyTimer = null;
   var emergencyStatusTimer = null;
@@ -296,7 +298,10 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     messagesEl.scrollTop = messagesEl.scrollHeight;
     if (msg.sender_type === "agent" && msg.seq > lastReadSeq) {
       lastReadSeq = msg.seq;
-      if (!opened && msg.seq > seenAgentSeq) unreadCount++;
+      if (!opened && msg.seq > seenAgentSeq && !countedAgentSeqs[msg.seq]) {
+        countedAgentSeqs[msg.seq] = true;
+        unreadCount++;
+      }
     }
     updateBadge();
   }
@@ -344,6 +349,9 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   }
   function imageErrorMessage(data){
     var code = data && data.error;
+    var status = data && data.status;
+    var text = String((data && data.message) || "");
+    if (status === 413 || /413|request entity too large|payload too large|client intended to send too large body/i.test(text)) return "图片发送失败：服务器上传入口限制太小，请把反向代理 client_max_body_size 调到 30M 以上";
     if (code === "unsupported_image_type") return "图片格式不支持，请选择 JPG、PNG 或 WebP 图片";
     if (code === "file_too_large") return "图片太大，请选择 30MB 以内的图片";
     if (code === "file_required" || code === "invalid_upload") return "请选择要发送的图片";
@@ -385,7 +393,12 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     }, 1000);
   }
   function authHeaders(){ return token ? {"Authorization":"Bearer " + token, "Content-Type":"application/json"} : {"Content-Type":"application/json"}; }
-  function canMarkRead(){ return token && lastReadSeq && opened && !document.hidden && document.hasFocus(); }
+  function noteUserActive(){ lastUserActiveAt = Date.now(); }
+  document.addEventListener("pointerdown", noteUserActive, true);
+  document.addEventListener("keydown", noteUserActive, true);
+  function canMarkRead(){
+    return token && lastReadSeq && opened && !document.hidden && document.hasFocus() && Date.now() - lastUserActiveAt < 15000;
+  }
   function setOpen(next){
     opened = next;
     launcherEl.classList.toggle("hidden", opened);
@@ -396,6 +409,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
       if (lastReadSeq) {
         seenAgentSeq = lastReadSeq;
         localStorage.setItem("chat_v0_seen_agent_seq_" + site, String(seenAgentSeq));
+        countedAgentSeqs = {};
       }
       updateBadge();
       sendRead();
@@ -418,7 +432,6 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     }).then(function(data){
       if (!data) return;
       messagesEl.innerHTML = "";
-      unreadCount = 0;
       (data.messages || []).forEach(appendMessage);
       if ((data.messages || []).length === 0) addSystem("可以开始聊天了");
       showAuthed();
@@ -426,6 +439,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
         if (lastReadSeq) {
           seenAgentSeq = lastReadSeq;
           localStorage.setItem("chat_v0_seen_agent_seq_" + site, String(seenAgentSeq));
+          countedAgentSeqs = {};
         }
         updateBadge();
         sendRead();
@@ -489,11 +503,19 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     var file = imageInputEl.files && imageInputEl.files[0];
     imageInputEl.value = "";
     if (!file) return;
+    if (file.size > 30 * 1024 * 1024) { addSystem("图片太大，请选择 30MB 以内的图片", "error"); return; }
     var form = new FormData();
     form.append("file", file);
     setLoading(imageBtn, true, "上传中");
     fetch(api + "/api/v1/customer/images", {method:"POST", headers: token ? {"Authorization":"Bearer " + token} : {}, body: form})
-      .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
+      .then(function(r){
+        return r.text().then(function(text){
+          var data = {};
+          try { data = text ? JSON.parse(text) : {}; } catch(e) { data = {message:text}; }
+          if(!r.ok) { data.status = r.status; throw data; }
+          return data;
+        });
+      })
       .then(function(data){ appendMessage(data.message); })
       .catch(function(data){ addSystem(imageErrorMessage(data), "error"); })
       .finally(function(){ setLoading(imageBtn, false); });

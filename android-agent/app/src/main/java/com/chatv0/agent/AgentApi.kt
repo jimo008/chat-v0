@@ -58,7 +58,7 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
                 o.optLong("seq"),
                 o.optString("type"),
                 o.optString("content"),
-                o.optString("customer_read_at").ifBlank { null },
+                if (o.isNull("customer_read_at")) null else o.optString("customer_read_at").ifBlank { null },
                 if (o.isNull("attachment_id")) null else o.optLong("attachment_id"),
                 o.optString("created_at")
             )

@@ -264,8 +264,8 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var unreadCount = 0;
   var countedAgentSeqs = {};
   var opened = false;
-  var lastUserActiveAt = 0;
   var lastAgentArrivedAt = 0;
+  var panelVisibleSince = 0;
   var emergencySeconds = 0;
   var emergencyTimer = null;
   var emergencyStatusTimer = null;
@@ -304,6 +304,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
         countedAgentSeqs[msg.seq] = true;
         unreadCount++;
       }
+      setTimeout(sendRead, 2100);
     }
     updateBadge();
   }
@@ -395,17 +396,16 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     }, 1000);
   }
   function authHeaders(){ return token ? {"Authorization":"Bearer " + token, "Content-Type":"application/json"} : {"Content-Type":"application/json"}; }
-  function noteUserActive(){ lastUserActiveAt = Date.now(); }
-  document.addEventListener("pointerdown", noteUserActive, true);
-  document.addEventListener("keydown", noteUserActive, true);
   function canMarkRead(){
-    return token && lastReadSeq && opened && !document.hidden && document.hasFocus() && lastUserActiveAt >= lastAgentArrivedAt && Date.now() - lastUserActiveAt < 15000;
+    return token && lastReadSeq && opened && !document.hidden && document.hasFocus() && panelVisibleSince > 0 && Date.now() - Math.max(panelVisibleSince, lastAgentArrivedAt) >= 2000;
   }
   function setOpen(next){
     opened = next;
+    panelVisibleSince = opened ? Date.now() : 0;
     launcherEl.classList.toggle("hidden", opened);
     document.querySelector(".panel").classList.toggle("hidden", !opened);
     window.parent.postMessage({type:"chat-v0:resize", open: opened}, "*");
+    if (opened) setTimeout(sendRead, 2100);
     if (opened && canMarkRead()) {
       unreadCount = 0;
       if (lastReadSeq) {

@@ -71,49 +71,51 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
     }
     return "";
   }
-  function storedTokens(){
-    var names = ["token", "auth_token", "access_token", "Authorization", "authorization", "v2board_token", "xboard_token"];
-    var out = [];
-    function add(v){
-      if (!v) return;
-      v = String(v).replace(/^Bearer\s+/i, "").replace(/^"|"$/g, "");
-      if (v && out.indexOf(v) === -1) out.push(v);
-    }
-    function scanValue(v, depth){
-      if (!v || depth > 4) return;
-      if (typeof v === "string") {
-        var s = v.trim();
-        if (/^[A-Za-z0-9._~+/-]{16,}$/.test(s)) add(s);
-        if ((s[0] === "{" && s[s.length - 1] === "}") || (s[0] === "[" && s[s.length - 1] === "]")) {
-          try { scanValue(JSON.parse(s), depth + 1); } catch(e) {}
-        }
-        return;
-      }
-      if (typeof v !== "object") return;
-      for (var k in v) {
-        if (!Object.prototype.hasOwnProperty.call(v, k)) continue;
-        if (/token|auth/i.test(k)) add(v[k]);
-        scanValue(v[k], depth + 1);
-      }
-    }
-    for (var i = 0; i < names.length; i++) {
-      try { add(localStorage.getItem(names[i])); } catch(e) {}
-      try { add(sessionStorage.getItem(names[i])); } catch(e) {}
-    }
-    try {
-      for (var j = 0; j < localStorage.length; j++) {
-        var key = localStorage.key(j);
-        if (/token|auth/i.test(key || "")) add(localStorage.getItem(key));
-        scanValue(localStorage.getItem(key), 0);
-      }
-      for (var k = 0; k < sessionStorage.length; k++) {
-        var skey = sessionStorage.key(k);
-        if (/token|auth/i.test(skey || "")) add(sessionStorage.getItem(skey));
-        scanValue(sessionStorage.getItem(skey), 0);
-      }
-    } catch(e) {}
-    return out;
+  function inspectXBoardPayload(payload, source){
+    var identity = normalizeXBoardInfo(payload);
+    if (identity) postIdentity(identity, source);
   }
+  function installResponseHooks(){
+    if (window.__chatV0HooksInstalled) return;
+    window.__chatV0HooksInstalled = true;
+    var originalFetch = window.fetch;
+    if (originalFetch) {
+      window.fetch = function(){
+        var args = arguments;
+        return originalFetch.apply(this, args).then(function(resp){
+          try {
+            var url = "";
+            try { url = String(args[0] && (args[0].url || args[0]) || ""); } catch(e) {}
+            if (/\/api\/v1\/user\/info/i.test(url)) {
+              resp.clone().json().then(function(data){ inspectXBoardPayload(data, "xboard fetch " + url); }).catch(function(){});
+            }
+          } catch(e) {}
+          return resp;
+        });
+      };
+    }
+    var OriginalXHR = window.XMLHttpRequest;
+    if (OriginalXHR) {
+      window.XMLHttpRequest = function(){
+        var xhr = new OriginalXHR();
+        var url = "";
+        var open = xhr.open;
+        xhr.open = function(method, requestUrl){
+          url = String(requestUrl || "");
+          return open.apply(xhr, arguments);
+        };
+        xhr.addEventListener("load", function(){
+          try {
+            if (/\/api\/v1\/user\/info/i.test(url)) {
+              inspectXBoardPayload(JSON.parse(xhr.responseText), "xboard xhr " + url);
+            }
+          } catch(e) {}
+        });
+        return xhr;
+      };
+    }
+  }
+  installResponseHooks();
   function sendIdentity(){
     if (window.SupportChatIdentity) {
       postIdentity(window.SupportChatIdentity, "SupportChatIdentity");
@@ -121,32 +123,6 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
   }
   iframe.addEventListener("load", sendIdentity);
   var lastIdentity = "";
-  var lastInfoCheck = 0;
-  var xboardInfoInFlight = false;
-  function pollXBoardInfo(){
-    if (xboardInfoInFlight || Date.now() - lastInfoCheck < 3000) return;
-    lastInfoCheck = Date.now();
-    xboardInfoInFlight = true;
-    var tokens = storedTokens();
-    var attempts = [{credentials:"include", headers:{}}].concat(tokens.map(function(t){ return {credentials:"include", headers:{Authorization:"Bearer " + t}}; }));
-    var chain = Promise.reject(new Error("start"));
-    attempts.forEach(function(opts, index){
-      chain = chain.catch(function(){
-        return fetch("/api/v1/user/info", opts).then(function(r){
-          if (!r.ok) throw new Error("status " + r.status);
-          return r.json();
-        }).then(function(data){
-          var identity = normalizeXBoardInfo(data);
-          if (!identity) throw new Error("missing id/email");
-          postIdentity(identity, index === 0 ? "/api/v1/user/info cookie" : "/api/v1/user/info bearer");
-          return true;
-        });
-      });
-    });
-    chain.catch(function(err){
-      console.info("[chat-v0] /api/v1/user/info unavailable", err && err.message ? err.message : err, "tokens", tokens.length);
-    }).finally(function(){ xboardInfoInFlight = false; });
-  }
   setInterval(function(){
     var next = "";
     try { next = JSON.stringify(window.SupportChatIdentity || null); } catch(e) {}
@@ -154,9 +130,7 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
       lastIdentity = next;
       sendIdentity();
     }
-    pollXBoardInfo();
   }, 2000);
-  setTimeout(pollXBoardInfo, 1000);
   window.addEventListener("message", function(ev){
     if (ev.origin !== "%s") return;
     var data = ev.data || {};

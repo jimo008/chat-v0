@@ -197,7 +197,7 @@ func (s *Server) insertTextMessage(ctx context.Context, tx *sql.Tx, siteID, conv
 		Type:             "text",
 		Content:          content,
 		AttachmentID:     nil,
-		CreatedAt:        time.Now(),
+		CreatedAt:        time.Now().In(appTimeLocation),
 	}, nil
 }
 
@@ -248,7 +248,7 @@ func (s *Server) insertImageMessage(ctx context.Context, tx *sql.Tx, siteID, con
 		Type:             "image",
 		Content:          "",
 		AttachmentID:     attachmentID,
-		CreatedAt:        time.Now(),
+		CreatedAt:        time.Now().In(appTimeLocation),
 	}, nil
 }
 

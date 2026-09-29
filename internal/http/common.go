@@ -7,6 +7,14 @@ import (
 	"time"
 )
 
+var appTimeLocation = func() *time.Location {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		return time.FixedZone("Asia/Shanghai", 8*60*60)
+	}
+	return loc
+}()
+
 type siteRecord struct {
 	ID      uint64
 	SiteKey string
@@ -62,7 +70,16 @@ func nullableTimeValue(value sql.NullTime) any {
 	if !value.Valid {
 		return nil
 	}
-	return value.Time
+	return time.Date(
+		value.Time.Year(),
+		value.Time.Month(),
+		value.Time.Day(),
+		value.Time.Hour(),
+		value.Time.Minute(),
+		value.Time.Second(),
+		value.Time.Nanosecond(),
+		appTimeLocation,
+	)
 }
 
 func reverseMessages(messages []map[string]any) {

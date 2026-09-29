@@ -43,10 +43,10 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
     iframe.contentWindow.postMessage({type:"chat-v0:xboard-identity", identity: identity, source: source}, "%s");
   }
   function normalizeXBoardInfo(raw){
-    var root = raw && (raw.data || raw.user || raw);
+    var root = raw && (raw.data && (raw.data.user || raw.data.info || raw.data) || raw.user || raw);
     if (!root) return null;
-    var id = root.xboard_user_id || root.user_id || root.id || root.uuid;
-    var email = root.email || root.mail || root.account || root.username;
+    var id = root.xboard_user_id || root.user_id || root.id || root.uuid || deepFind(raw, ["xboard_user_id", "user_id", "uuid", "id"]);
+    var email = root.email || root.mail || root.account || root.username || deepFind(raw, ["email", "mail"]);
     if (!id || !email) return null;
     return {
       xboard_user_id: String(id),
@@ -58,6 +58,39 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
       raw_profile: raw
     };
   }
+  function deepFind(obj, keys, depth){
+    depth = depth || 0;
+    if (!obj || typeof obj !== "object" || depth > 4) return "";
+    for (var i = 0; i < keys.length; i++) {
+      if (obj[keys[i]] !== undefined && obj[keys[i]] !== null && obj[keys[i]] !== "") return obj[keys[i]];
+    }
+    for (var k in obj) {
+      if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
+      var found = deepFind(obj[k], keys, depth + 1);
+      if (found) return found;
+    }
+    return "";
+  }
+  function storedTokens(){
+    var names = ["token", "auth_token", "access_token", "Authorization", "authorization", "v2board_token", "xboard_token"];
+    var out = [];
+    function add(v){
+      if (!v) return;
+      v = String(v).replace(/^Bearer\s+/i, "").replace(/^"|"$/g, "");
+      if (v && out.indexOf(v) === -1) out.push(v);
+    }
+    for (var i = 0; i < names.length; i++) {
+      try { add(localStorage.getItem(names[i])); } catch(e) {}
+      try { add(sessionStorage.getItem(names[i])); } catch(e) {}
+    }
+    try {
+      for (var j = 0; j < localStorage.length; j++) {
+        var key = localStorage.key(j);
+        if (/token|auth/i.test(key || "")) add(localStorage.getItem(key));
+      }
+    } catch(e) {}
+    return out;
+  }
   function sendIdentity(){
     if (window.SupportChatIdentity) {
       postIdentity(window.SupportChatIdentity, "SupportChatIdentity");
@@ -66,19 +99,30 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
   iframe.addEventListener("load", sendIdentity);
   var lastIdentity = "";
   var lastInfoCheck = 0;
+  var xboardInfoInFlight = false;
   function pollXBoardInfo(){
-    if (Date.now() - lastInfoCheck < 10000) return;
+    if (xboardInfoInFlight || Date.now() - lastInfoCheck < 3000) return;
     lastInfoCheck = Date.now();
-    fetch("/api/v1/user/info", {credentials:"include"}).then(function(r){
-      if (!r.ok) throw new Error("status " + r.status);
-      return r.json();
-    }).then(function(data){
-      var identity = normalizeXBoardInfo(data);
-      if (identity) postIdentity(identity, "/api/v1/user/info");
-      else console.info("[chat-v0] /api/v1/user/info returned without usable id/email", data);
-    }).catch(function(err){
-      console.info("[chat-v0] /api/v1/user/info unavailable", err && err.message ? err.message : err);
+    xboardInfoInFlight = true;
+    var tokens = storedTokens();
+    var attempts = [{credentials:"include", headers:{}}].concat(tokens.map(function(t){ return {credentials:"include", headers:{Authorization:"Bearer " + t}}; }));
+    var chain = Promise.reject(new Error("start"));
+    attempts.forEach(function(opts, index){
+      chain = chain.catch(function(){
+        return fetch("/api/v1/user/info", opts).then(function(r){
+          if (!r.ok) throw new Error("status " + r.status);
+          return r.json();
+        }).then(function(data){
+          var identity = normalizeXBoardInfo(data);
+          if (!identity) throw new Error("missing id/email");
+          postIdentity(identity, index === 0 ? "/api/v1/user/info cookie" : "/api/v1/user/info bearer");
+          return true;
+        });
+      });
     });
+    chain.catch(function(err){
+      console.info("[chat-v0] /api/v1/user/info unavailable", err && err.message ? err.message : err, "tokens", tokens.length);
+    }).finally(function(){ xboardInfoInFlight = false; });
   }
   setInterval(function(){
     var next = "";

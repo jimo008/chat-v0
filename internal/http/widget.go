@@ -276,6 +276,8 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var codeTimer = null;
   var codeCountdown = 0;
   var loadingOlder = false;
+  var initialScrollLocked = false;
+  var allowOlderLoad = false;
 
   function addSystem(text, kind){
     var cls = "system" + (kind ? " " + kind : "");
@@ -300,6 +302,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
       img.className = "msgImage";
       img.alt = "图片消息";
       img.src = attachmentURL(msg.attachment_id);
+      img.onload = function(){ if (initialScrollLocked) scrollToBottomSoon(); };
       img.onclick = function(){ openImage(img.src); };
       body.appendChild(img);
     } else {
@@ -435,6 +438,13 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     }, 1000);
   }
   function authHeaders(){ return token ? {"Authorization":"Bearer " + token, "Content-Type":"application/json"} : {"Content-Type":"application/json"}; }
+  function scrollToBottom(){ messagesEl.scrollTop = messagesEl.scrollHeight; }
+  function scrollToBottomSoon(){
+    scrollToBottom();
+    requestAnimationFrame(scrollToBottom);
+    setTimeout(scrollToBottom, 80);
+    setTimeout(scrollToBottom, 260);
+  }
   function canMarkRead(){
     return token && lastReadSeq && opened && !document.hidden && document.hasFocus() && panelVisibleSince > 0 && Date.now() - Math.max(panelVisibleSince, lastAgentArrivedAt) >= 2000;
   }
@@ -458,6 +468,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     if (opened) {
       unreadCount = 0;
       updateBadge();
+      scrollToBottomSoon();
     }
   }
   function updateBadge(){
@@ -483,9 +494,15 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
         renderedMessages = {};
         maxMessageSeq = 0;
         minMessageSeq = 0;
+        allowOlderLoad = false;
+        initialScrollLocked = true;
       }
       (data.messages || []).forEach(appendMessage);
       if (!incremental && (data.messages || []).length === 0) addSystem("可以开始聊天了");
+      if (!incremental) {
+        scrollToBottomSoon();
+        setTimeout(function(){ initialScrollLocked = false; allowOlderLoad = true; }, 500);
+      }
       showAuthed();
       if (canMarkRead()) {
         if (lastReadSeq) {
@@ -505,7 +522,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
       .catch(function(){});
   }
   function loadOlder(){
-    if (!token || loadingOlder || !minMessageSeq) return;
+    if (!token || loadingOlder || !minMessageSeq || !allowOlderLoad) return;
     loadingOlder = true;
     fetch(api + "/api/v1/customer/conversation?before_seq=" + encodeURIComponent(minMessageSeq), {headers: authHeaders()})
       .then(function(r){ return r.json(); })
@@ -513,7 +530,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
       .catch(function(){})
       .finally(function(){ loadingOlder = false; });
   }
-  messagesEl.addEventListener("scroll", function(){ if (opened && messagesEl.scrollTop < 32) loadOlder(); });
+  messagesEl.addEventListener("scroll", function(){ if (opened && allowOlderLoad && messagesEl.scrollTop < 32) loadOlder(); });
   document.addEventListener("visibilitychange", sendRead);
   window.addEventListener("focus", sendRead);
   setInterval(function(){ if(token) loadConversation(true); }, 3000);

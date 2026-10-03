@@ -261,6 +261,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var cancelEmergencyBtn = document.getElementById("cancelEmergency");
   var lastReadSeq = 0;
   var maxMessageSeq = 0;
+  var minMessageSeq = 0;
   var renderedMessages = {};
   var seenAgentSeq = Number(localStorage.getItem("chat_v0_seen_agent_seq_" + site) || "0");
   var unreadCount = 0;
@@ -274,6 +275,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var emergencyActive = false;
   var codeTimer = null;
   var codeCountdown = 0;
+  var loadingOlder = false;
 
   function addSystem(text, kind){
     var cls = "system" + (kind ? " " + kind : "");
@@ -286,6 +288,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     if (msg.id && renderedMessages[msg.id]) return;
     if (msg.id) renderedMessages[msg.id] = true;
     if (msg.seq && msg.seq > maxMessageSeq) maxMessageSeq = msg.seq;
+    if (msg.seq && (!minMessageSeq || msg.seq < minMessageSeq)) minMessageSeq = msg.seq;
     clearOnlySystem();
     var div = document.createElement("div");
     div.className = "msg " + (msg.sender_type === "customer" ? "customer" : "agent");
@@ -316,6 +319,33 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
       setTimeout(sendRead, 2100);
     }
     updateBadge();
+  }
+  function prependMessage(msg){
+    if (msg.id && renderedMessages[msg.id]) return;
+    if (msg.id) renderedMessages[msg.id] = true;
+    if (msg.seq && msg.seq > maxMessageSeq) maxMessageSeq = msg.seq;
+    if (msg.seq && (!minMessageSeq || msg.seq < minMessageSeq)) minMessageSeq = msg.seq;
+    clearOnlySystem();
+    var beforeHeight = messagesEl.scrollHeight;
+    var div = document.createElement("div");
+    div.className = "msg " + (msg.sender_type === "customer" ? "customer" : "agent");
+    var body = document.createElement("div");
+    body.className = "msgBody";
+    if (msg.type === "image" && msg.attachment_id) {
+      div.className += " imageMsg";
+      var img = document.createElement("img");
+      img.className = "msgImage";
+      img.alt = "图片消息";
+      img.src = attachmentURL(msg.attachment_id);
+      img.onclick = function(){ openImage(img.src); };
+      body.appendChild(img);
+    } else {
+      body.textContent = msg.type === "image" ? "[图片消息]" : (msg.content || "");
+    }
+    div.appendChild(body);
+    div.appendChild(messageMeta(msg));
+    messagesEl.insertBefore(div, messagesEl.firstChild);
+    messagesEl.scrollTop = messagesEl.scrollHeight - beforeHeight;
   }
   function messageMeta(msg){
     var meta = document.createElement("div");
@@ -425,6 +455,10 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
       updateBadge();
       sendRead();
     }
+    if (opened) {
+      unreadCount = 0;
+      updateBadge();
+    }
   }
   function updateBadge(){
     if (unreadCount > 0) { badgeEl.textContent = unreadCount > 99 ? "99+" : String(unreadCount); badgeEl.classList.remove("hidden"); }
@@ -448,6 +482,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
         messagesEl.innerHTML = "";
         renderedMessages = {};
         maxMessageSeq = 0;
+        minMessageSeq = 0;
       }
       (data.messages || []).forEach(appendMessage);
       if (!incremental && (data.messages || []).length === 0) addSystem("可以开始聊天了");
@@ -465,8 +500,20 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   }
   function sendRead(){
     if (!canMarkRead()) return;
-    fetch(api + "/api/v1/customer/read", {method:"POST", headers:authHeaders(), body:JSON.stringify({up_to_seq:lastReadSeq,visible:true})}).catch(function(){});
+    fetch(api + "/api/v1/customer/read", {method:"POST", headers:authHeaders(), body:JSON.stringify({up_to_seq:lastReadSeq,visible:true,open:opened,opened_since_ms:Date.now() - panelVisibleSince})})
+      .then(function(){ unreadCount = 0; if (lastReadSeq) { seenAgentSeq = lastReadSeq; localStorage.setItem("chat_v0_seen_agent_seq_" + site, String(seenAgentSeq)); countedAgentSeqs = {}; } updateBadge(); })
+      .catch(function(){});
   }
+  function loadOlder(){
+    if (!token || loadingOlder || !minMessageSeq) return;
+    loadingOlder = true;
+    fetch(api + "/api/v1/customer/conversation?before_seq=" + encodeURIComponent(minMessageSeq), {headers: authHeaders()})
+      .then(function(r){ return r.json(); })
+      .then(function(data){ (data.messages || []).forEach(prependMessage); })
+      .catch(function(){})
+      .finally(function(){ loadingOlder = false; });
+  }
+  messagesEl.addEventListener("scroll", function(){ if (opened && messagesEl.scrollTop < 32) loadOlder(); });
   document.addEventListener("visibilitychange", sendRead);
   window.addEventListener("focus", sendRead);
   setInterval(function(){ if(token) loadConversation(true); }, 3000);

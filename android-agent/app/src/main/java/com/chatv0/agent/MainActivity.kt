@@ -33,9 +33,11 @@ import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 import java.io.File
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -220,6 +222,8 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
     var localMessages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
     var input by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("加载中") }
+    var loadingOlder by remember { mutableStateOf(false) }
+    var didInitialScroll by remember(customer.conversationId) { mutableStateOf(false) }
     val listState = rememberLazyListState()
     BackHandler { onBack() }
 
@@ -240,13 +244,37 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
                 .onFailure { status = it.message ?: "加载失败" }
         }
     }
-    LaunchedEffect(customer.conversationId) {
-        val cached = prefs.cachedConversation(customer.conversationId)
-        if (cached.isNotBlank()) {
-            runCatching { AgentApi(prefs.baseUrl, prefs.token).parseConversation(JSONObject(cached)) }
-                .onSuccess { detail = it; localMessages = it.messages; status = "" }
+    fun loadOlder() {
+        val firstSeq = localMessages.firstOrNull { it.seq > 0 }?.seq ?: return
+        if (loadingOlder) return
+        scope.launch {
+            loadingOlder = true
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    AgentApi(prefs.baseUrl, prefs.token).parseConversation(
+                        AgentApi(prefs.baseUrl, prefs.token).conversationJson(customer.conversationId, firstSeq)
+                    )
+                }
+            }.onSuccess { older ->
+                val existing = localMessages.map { it.id }.toSet()
+                val incoming = older.messages.filter { it.id !in existing }
+                if (incoming.isNotEmpty()) {
+                    localMessages = incoming + localMessages
+                    listState.scrollToItem(incoming.size)
+                }
+            }.onFailure { status = it.message ?: "加载更早消息失败" }
+            loadingOlder = false
         }
+    }
+    LaunchedEffect(customer.conversationId) {
         refresh()
+    }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.firstVisibleItemIndex }
+            .map { it == 0 && didInitialScroll && localMessages.isNotEmpty() }
+            .distinctUntilChanged()
+            .filter { it }
+            .collect { loadOlder() }
     }
     val imageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -278,9 +306,10 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
                 }
         }
     }
-    LaunchedEffect(localMessages.size) {
-        if (localMessages.isNotEmpty()) {
-            listState.animateScrollToItem(localMessages.lastIndex)
+    LaunchedEffect(localMessages.size, didInitialScroll) {
+        if (localMessages.isNotEmpty() && !didInitialScroll) {
+            listState.scrollToItem(localMessages.lastIndex)
+            didInitialScroll = true
         }
     }
 

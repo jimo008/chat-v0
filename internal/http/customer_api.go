@@ -50,6 +50,15 @@ func (s *Server) customerConversation(w http.ResponseWriter, r *http.Request) {
 		}
 		afterSeq = parsed
 	}
+	beforeSeq := uint64(0)
+	if raw := r.URL.Query().Get("before_seq"); raw != "" {
+		parsed, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_before_seq"})
+			return
+		}
+		beforeSeq = parsed
+	}
 
 	query := `SELECT id, sender_type, sender_customer_id, sender_agent_id, seq, type, content, attachment_id, customer_read_at, created_at
 		 FROM messages
@@ -57,7 +66,14 @@ func (s *Server) customerConversation(w http.ResponseWriter, r *http.Request) {
 		 ORDER BY created_at DESC, id DESC
 		 LIMIT ?`
 	args := []any{customer.ConversationID, limit}
-	if afterSeq > 0 {
+	if beforeSeq > 0 {
+		query = `SELECT id, sender_type, sender_customer_id, sender_agent_id, seq, type, content, attachment_id, customer_read_at, created_at
+		 FROM messages
+		 WHERE conversation_id = ? AND seq < ?
+		 ORDER BY seq DESC
+		 LIMIT ?`
+		args = []any{customer.ConversationID, beforeSeq, limit}
+	} else if afterSeq > 0 {
 		query = `SELECT id, sender_type, sender_customer_id, sender_agent_id, seq, type, content, attachment_id, customer_read_at, created_at
 		 FROM messages
 		 WHERE conversation_id = ? AND seq > ?

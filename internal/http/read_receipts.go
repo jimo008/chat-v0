@@ -6,8 +6,10 @@ import (
 )
 
 type customerReadRequest struct {
-	UpToSeq uint64 `json:"up_to_seq"`
-	Visible bool   `json:"visible"`
+	UpToSeq       uint64 `json:"up_to_seq"`
+	Visible       bool   `json:"visible"`
+	Open          bool   `json:"open"`
+	OpenedSinceMS int64  `json:"opened_since_ms"`
 }
 
 func (s *Server) customerRead(w http.ResponseWriter, r *http.Request) {
@@ -21,8 +23,16 @@ func (s *Server) customerRead(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
 		return
 	}
-	if req.UpToSeq == 0 || !req.Visible {
-		s.logger.Info("customer read ignored", "conversation_id", customer.ConversationID, "customer_id", customer.CustomerID, "up_to_seq", req.UpToSeq, "visible", req.Visible)
+	if req.UpToSeq == 0 || !req.Visible || !req.Open || req.OpenedSinceMS < 2000 {
+		s.logger.Info(
+			"customer read ignored",
+			"conversation_id", customer.ConversationID,
+			"customer_id", customer.CustomerID,
+			"up_to_seq", req.UpToSeq,
+			"visible", req.Visible,
+			"open", req.Open,
+			"opened_since_ms", req.OpenedSinceMS,
+		)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "up_to_seq_required"})
 		return
 	}

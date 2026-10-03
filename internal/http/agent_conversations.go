@@ -3,6 +3,7 @@ package http
 import (
 	"database/sql"
 	"net/http"
+	"strconv"
 )
 
 func (s *Server) agentListCustomers(w http.ResponseWriter, r *http.Request) {
@@ -137,15 +138,41 @@ func (s *Server) agentGetConversation(w http.ResponseWriter, r *http.Request) {
 		s.logger.Info("accepted emergency from conversation open", "conversation_id", conversationID, "accepted", accepted)
 	}
 
-	rows, err := s.db.QueryContext(
-		r.Context(),
-		`SELECT id, sender_type, sender_customer_id, sender_agent_id, seq, type, content, attachment_id, customer_read_at, created_at
+	limit := 50
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 200 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_limit"})
+			return
+		}
+		limit = parsed
+	}
+	beforeSeq := uint64(0)
+	if raw := r.URL.Query().Get("before_seq"); raw != "" {
+		parsed, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_before_seq"})
+			return
+		}
+		beforeSeq = parsed
+	}
+
+	query := `SELECT id, sender_type, sender_customer_id, sender_agent_id, seq, type, content, attachment_id, customer_read_at, created_at
 		 FROM messages
 		 WHERE conversation_id = ?
 		 ORDER BY created_at DESC, id DESC
-		 LIMIT 100`,
-		conversationID,
-	)
+		 LIMIT ?`
+	args := []any{conversationID, limit}
+	if beforeSeq > 0 {
+		query = `SELECT id, sender_type, sender_customer_id, sender_agent_id, seq, type, content, attachment_id, customer_read_at, created_at
+		 FROM messages
+		 WHERE conversation_id = ? AND seq < ?
+		 ORDER BY seq DESC
+		 LIMIT ?`
+		args = []any{conversationID, beforeSeq, limit}
+	}
+
+	rows, err := s.db.QueryContext(r.Context(), query, args...)
 	if err != nil {
 		s.logger.Error("agent messages", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "messages_failed"})

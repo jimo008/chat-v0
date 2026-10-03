@@ -345,7 +345,14 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
         scope.launch {
             runCatching {
                 withContext(Dispatchers.IO) { AgentApi(prefs.baseUrl, prefs.token).sendMessage(customer.conversationId, text) }
-            }.onSuccess { refresh() }
+            }.onSuccess { sent ->
+                localMessages = localMessages.map { if (it.localKey == localKey) sent else it }
+                val mergedDetail = detail ?: ConversationDetail(customer.conversationId, customer.email, customer.siteName, customer.blocked, localMessages)
+                detail = mergedDetail.copy(messages = localMessages)
+                prefs.setCachedConversation(customer.conversationId, conversationCacheJson(mergedDetail, localMessages))
+                prefs.updateCachedCustomerPreview(customer.conversationId, text)
+                prefs.bumpCustomerListVersion()
+            }
                 .onFailure {
                     localMessages = localMessages.map { if (it.localKey == localKey) it.copy(localStatus = "failed") else it }
                 }

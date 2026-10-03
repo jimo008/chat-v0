@@ -71,14 +71,24 @@ class AgentPrefs(context: Context) {
         runCatching {
             val root = JSONObject(raw)
             val arr = root.optJSONArray("customers") ?: return
+            var updated: JSONObject? = null
+            val next = JSONArray()
             for (i in 0 until arr.length()) {
                 val item = arr.getJSONObject(i)
                 if (item.optLong("conversation_id") == conversationId) {
                     if (lastMessage.isNotBlank()) item.put("last_message", lastMessage)
                     if (unreadDelta != 0) item.put("unread_count", (item.optInt("unread_count") + unreadDelta).coerceAtLeast(0))
                     if (ringingDelta != 0) item.put("ringing_count", (item.optInt("ringing_count") + ringingDelta).coerceAtLeast(0))
-                    break
+                    updated = item
+                } else {
+                    next.put(item)
                 }
+            }
+            if (updated != null) {
+                val sorted = JSONArray()
+                sorted.put(updated)
+                for (i in 0 until next.length()) sorted.put(next.getJSONObject(i))
+                root.put("customers", sorted)
             }
             setCachedCustomers(root.toString())
         }

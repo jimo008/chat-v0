@@ -62,25 +62,24 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
         val customer = conv.getJSONObject("customer")
         val site = conv.getJSONObject("site")
         val arr = root.optJSONArray("messages") ?: JSONArray()
-        val messages = (0 until arr.length()).map { i ->
-            val o = arr.getJSONObject(i)
-            ChatMessage(
-                o.getLong("id"),
-                o.optString("sender_type"),
-                o.optLong("seq"),
-                o.optString("type"),
-                o.optString("content"),
-                if (o.isNull("customer_read_at")) null else o.optString("customer_read_at").ifBlank { null },
-                if (o.isNull("attachment_id")) null else o.optLong("attachment_id"),
-                o.optString("created_at")
-            )
-        }
+        val messages = (0 until arr.length()).map { i -> parseMessage(arr.getJSONObject(i)) }
         return ConversationDetail(conv.getLong("id"), customer.optString("email"), site.optString("name"), customer.optBoolean("blocked"), messages)
     }
 
-    fun sendMessage(conversationId: Long, content: String) {
-        postJson("/api/v1/agent/conversations/$conversationId/messages", JSONObject(mapOf("type" to "text", "content" to content)))
-    }
+    fun parseMessage(o: JSONObject): ChatMessage =
+        ChatMessage(
+            o.getLong("id"),
+            o.optString("sender_type"),
+            o.optLong("seq"),
+            o.optString("type"),
+            o.optString("content"),
+            if (o.isNull("customer_read_at")) null else o.optString("customer_read_at").ifBlank { null },
+            if (o.isNull("attachment_id")) null else o.optLong("attachment_id"),
+            o.optString("created_at")
+        )
+
+    fun sendMessage(conversationId: Long, content: String): ChatMessage =
+        parseMessage(postJson("/api/v1/agent/conversations/$conversationId/messages", JSONObject(mapOf("type" to "text", "content" to content))).getJSONObject("message"))
 
     fun uploadImage(context: Context, conversationId: Long, uri: Uri) {
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("无法读取图片")

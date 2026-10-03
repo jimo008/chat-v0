@@ -134,8 +134,16 @@ class AgentForegroundService : Service() {
                 "MESSAGE_CREATED" -> {
                     val payload = event.optJSONObject("payload") ?: event.optJSONObject("payload_json")
                     prefs.bumpCustomerListVersion()
+                    val conversationId = payload?.optLong("conversation_id", 0L) ?: 0L
+                    if (payload != null && conversationId > 0L) {
+                        prefs.appendCachedConversationMessage(conversationId, payload)
+                        val preview = when (payload.optString("type")) {
+                            "image" -> "[图片消息]"
+                            else -> payload.optString("content")
+                        }
+                        prefs.updateCachedCustomerPreview(conversationId, preview, if (payload.optString("sender_type") == "customer") 1 else 0)
+                    }
                     if (payload?.optString("sender_type") == "customer") {
-                        val conversationId = payload.optLong("conversation_id", 0L)
                         val content = when (payload.optString("type")) {
                             "image" -> "[图片消息]"
                             else -> payload.optString("content").ifBlank { "新的客户消息" }

@@ -49,8 +49,11 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
         return parseConversation(conversationJson(id))
     }
 
-    fun conversationJson(id: Long, beforeSeq: Long? = null): JSONObject {
-        val suffix = if (beforeSeq != null && beforeSeq > 0L) "?before_seq=$beforeSeq" else ""
+    fun conversationJson(id: Long, beforeSeq: Long? = null, afterSeq: Long? = null): JSONObject {
+        val params = mutableListOf<String>()
+        if (beforeSeq != null && beforeSeq > 0L) params.add("before_seq=$beforeSeq")
+        if (afterSeq != null && afterSeq > 0L) params.add("after_seq=$afterSeq")
+        val suffix = if (params.isEmpty()) "" else "?" + params.joinToString("&")
         return getJson("/api/v1/agent/conversations/$id$suffix")
     }
 

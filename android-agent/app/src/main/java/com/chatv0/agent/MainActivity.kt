@@ -254,15 +254,32 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
         scope.launch {
             runCatching { withContext(Dispatchers.IO) {
                 val api = AgentApi(prefs.baseUrl, prefs.token)
-                val json = api.conversationJson(customer.conversationId)
-                prefs.setCachedConversation(customer.conversationId, json.toString())
-                api.parseConversation(json)
+                val afterSeq = localMessages.filter { it.seq > 0 }.maxOfOrNull { it.seq } ?: 0L
+                val json = if (afterSeq > 0L) {
+                    api.conversationJson(customer.conversationId, afterSeq = afterSeq)
+                } else {
+                    api.conversationJson(customer.conversationId)
+                }
+                val parsed = api.parseConversation(json)
+                if (afterSeq > 0L && parsed.messages.isEmpty()) {
+                    null
+                } else {
+                    parsed
+                }
             } }
-                .onSuccess {
-                    detail = it
-                    localMessages = it.messages
+                .onSuccess { latest ->
+                    if (latest != null) {
+                        val existing = localMessages.map { it.id }.toSet()
+                        val merged = if (localMessages.isEmpty()) latest.messages else localMessages + latest.messages.filter { it.id !in existing }
+                        detail = latest.copy(messages = merged)
+                        localMessages = merged
+                        prefs.setCachedConversation(customer.conversationId, conversationCacheJson(latest, merged))
+                    }
                     status = ""
-                    withContext(Dispatchers.IO) { runCatching { AgentApi(prefs.baseUrl, prefs.token).markRead(customer.conversationId) } }
+                    withContext(Dispatchers.IO) {
+                        runCatching { AgentApi(prefs.baseUrl, prefs.token).markRead(customer.conversationId) }
+                        prefs.markCachedCustomerRead(customer.conversationId)
+                    }
                 }
                 .onFailure { status = it.message ?: "加载失败" }
         }
@@ -290,6 +307,11 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
         }
     }
     LaunchedEffect(customer.conversationId) {
+        val cached = prefs.cachedConversation(customer.conversationId)
+        if (cached.isNotBlank()) {
+            runCatching { AgentApi(prefs.baseUrl, prefs.token).parseConversation(JSONObject(cached)) }
+                .onSuccess { detail = it; localMessages = it.messages; status = "" }
+        }
         refresh()
     }
     LaunchedEffect(listState) {
@@ -464,6 +486,35 @@ fun AttachmentImage(prefs: AgentPrefs, attachmentId: Long) {
 
 fun attachmentCacheFile(context: android.content.Context, attachmentId: Long): File =
     File(File(context.filesDir, "attachments"), "$attachmentId.img")
+
+fun conversationCacheJson(detail: ConversationDetail, messages: List<ChatMessage>): String {
+    val root = JSONObject()
+    root.put("conversation", JSONObject().apply {
+        put("id", detail.conversationId)
+        put("customer", JSONObject().apply {
+            put("email", detail.customerEmail)
+            put("blocked", detail.blocked)
+        })
+        put("site", JSONObject().apply {
+            put("name", detail.siteName)
+        })
+    })
+    root.put("messages", org.json.JSONArray().apply {
+        messages.forEach { m ->
+            put(JSONObject().apply {
+                put("id", m.id)
+                put("sender_type", m.senderType)
+                put("seq", m.seq)
+                put("type", m.type)
+                put("content", m.content)
+                if (m.customerReadAt == null) put("customer_read_at", JSONObject.NULL) else put("customer_read_at", m.customerReadAt)
+                if (m.attachmentId == null) put("attachment_id", JSONObject.NULL) else put("attachment_id", m.attachmentId)
+                put("created_at", m.createdAt)
+            })
+        }
+    })
+    return root.toString()
+}
 
 fun formatTime(value: String): String {
     if (value.isBlank()) return "刚刚"

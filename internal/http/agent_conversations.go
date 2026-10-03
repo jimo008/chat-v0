@@ -156,6 +156,15 @@ func (s *Server) agentGetConversation(w http.ResponseWriter, r *http.Request) {
 		}
 		beforeSeq = parsed
 	}
+	afterSeq := uint64(0)
+	if raw := r.URL.Query().Get("after_seq"); raw != "" {
+		parsed, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_after_seq"})
+			return
+		}
+		afterSeq = parsed
+	}
 
 	query := `SELECT id, sender_type, sender_customer_id, sender_agent_id, seq, type, content, attachment_id, customer_read_at, created_at
 		 FROM messages
@@ -170,6 +179,13 @@ func (s *Server) agentGetConversation(w http.ResponseWriter, r *http.Request) {
 		 ORDER BY seq DESC
 		 LIMIT ?`
 		args = []any{conversationID, beforeSeq, limit}
+	} else if afterSeq > 0 {
+		query = `SELECT id, sender_type, sender_customer_id, sender_agent_id, seq, type, content, attachment_id, customer_read_at, created_at
+		 FROM messages
+		 WHERE conversation_id = ? AND seq > ?
+		 ORDER BY seq ASC
+		 LIMIT ?`
+		args = []any{conversationID, afterSeq, limit}
 	}
 
 	rows, err := s.db.QueryContext(r.Context(), query, args...)
@@ -217,7 +233,9 @@ func (s *Server) agentGetConversation(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "message_iter_failed"})
 		return
 	}
-	reverseMessages(messages)
+	if afterSeq == 0 {
+		reverseMessages(messages)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"conversation": map[string]any{

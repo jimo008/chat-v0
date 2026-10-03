@@ -1,6 +1,8 @@
 package com.chatv0.agent
 
 import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
 
 class AgentPrefs(context: Context) {
     private val prefs = context.getSharedPreferences("agent", Context.MODE_PRIVATE)
@@ -45,6 +47,58 @@ class AgentPrefs(context: Context) {
 
     fun setCachedConversation(conversationId: Long, json: String) {
         prefs.edit().putString("conversation_$conversationId", json).apply()
+    }
+
+    fun appendCachedConversationMessage(conversationId: Long, message: JSONObject) {
+        val raw = cachedConversation(conversationId)
+        if (raw.isBlank()) return
+        runCatching {
+            val root = JSONObject(raw)
+            val arr = root.optJSONArray("messages") ?: JSONArray()
+            val messageId = message.optLong("id", 0L)
+            for (i in 0 until arr.length()) {
+                if (messageId > 0L && arr.getJSONObject(i).optLong("id") == messageId) return
+            }
+            arr.put(message)
+            root.put("messages", arr)
+            setCachedConversation(conversationId, root.toString())
+        }
+    }
+
+    fun updateCachedCustomerPreview(conversationId: Long, lastMessage: String, unreadDelta: Int = 0, ringingDelta: Int = 0) {
+        val raw = cachedCustomers()
+        if (raw.isBlank()) return
+        runCatching {
+            val root = JSONObject(raw)
+            val arr = root.optJSONArray("customers") ?: return
+            for (i in 0 until arr.length()) {
+                val item = arr.getJSONObject(i)
+                if (item.optLong("conversation_id") == conversationId) {
+                    if (lastMessage.isNotBlank()) item.put("last_message", lastMessage)
+                    if (unreadDelta != 0) item.put("unread_count", (item.optInt("unread_count") + unreadDelta).coerceAtLeast(0))
+                    if (ringingDelta != 0) item.put("ringing_count", (item.optInt("ringing_count") + ringingDelta).coerceAtLeast(0))
+                    break
+                }
+            }
+            setCachedCustomers(root.toString())
+        }
+    }
+
+    fun markCachedCustomerRead(conversationId: Long) {
+        val raw = cachedCustomers()
+        if (raw.isBlank()) return
+        runCatching {
+            val root = JSONObject(raw)
+            val arr = root.optJSONArray("customers") ?: return
+            for (i in 0 until arr.length()) {
+                val item = arr.getJSONObject(i)
+                if (item.optLong("conversation_id") == conversationId) {
+                    item.put("unread_count", 0)
+                    break
+                }
+            }
+            setCachedCustomers(root.toString())
+        }
     }
 
     fun clearAuth() {

@@ -56,8 +56,16 @@ class AgentPrefs(context: Context) {
             val root = JSONObject(raw)
             val arr = root.optJSONArray("messages") ?: JSONArray()
             val messageId = message.optLong("id", 0L)
+            val clientMsgId = message.optString("client_msg_id").takeIf { it.isNotBlank() && it != "null" }
             for (i in 0 until arr.length()) {
-                if (messageId > 0L && arr.getJSONObject(i).optLong("id") == messageId) return
+                val existing = arr.getJSONObject(i)
+                if (messageId > 0L && existing.optLong("id") == messageId) return
+                if (clientMsgId != null && existing.optString("client_msg_id") == clientMsgId) {
+                    arr.put(i, message)
+                    root.put("messages", arr)
+                    setCachedConversation(conversationId, root.toString())
+                    return
+                }
             }
             arr.put(message)
             root.put("messages", arr)
@@ -65,7 +73,7 @@ class AgentPrefs(context: Context) {
         }
     }
 
-    fun updateCachedCustomerPreview(conversationId: Long, lastMessage: String, unreadDelta: Int = 0, ringingDelta: Int = 0) {
+    fun updateCachedCustomerPreview(conversationId: Long, lastMessage: String, unreadDelta: Int = 0, ringingDelta: Int = 0, lastMessageAt: String = nowIso()) {
         val raw = cachedCustomers()
         if (raw.isBlank()) return
         runCatching {
@@ -77,6 +85,7 @@ class AgentPrefs(context: Context) {
                 val item = arr.getJSONObject(i)
                 if (item.optLong("conversation_id") == conversationId) {
                     if (lastMessage.isNotBlank()) item.put("last_message", lastMessage)
+                    if (lastMessageAt.isNotBlank()) item.put("last_message_at", lastMessageAt)
                     if (unreadDelta != 0) item.put("unread_count", (item.optInt("unread_count") + unreadDelta).coerceAtLeast(0))
                     if (ringingDelta != 0) item.put("ringing_count", (item.optInt("ringing_count") + ringingDelta).coerceAtLeast(0))
                     updated = item
@@ -115,3 +124,5 @@ class AgentPrefs(context: Context) {
         prefs.edit().remove("token").remove("last_seq").remove("customers_json").apply()
     }
 }
+
+private fun nowIso(): String = java.time.OffsetDateTime.now(java.time.ZoneOffset.ofHours(8)).toString()

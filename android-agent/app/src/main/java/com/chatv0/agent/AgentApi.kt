@@ -40,9 +40,10 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
                 o.optBoolean("blocked"),
                 o.optInt("unread_count"),
                 o.optInt("ringing_count"),
-                o.optString("last_message")
+                o.optString("last_message"),
+                o.optString("last_message_at")
             )
-        }
+        }.sortedWith(compareByDescending<CustomerItem> { if (it.ringingCount > 0) 1 else 0 }.thenByDescending { it.lastMessageAt })
     }
 
     fun conversation(id: Long): ConversationDetail {
@@ -75,11 +76,12 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
             o.optString("content"),
             if (o.isNull("customer_read_at")) null else o.optString("customer_read_at").ifBlank { null },
             if (o.isNull("attachment_id")) null else o.optLong("attachment_id"),
-            o.optString("created_at")
+            o.optString("created_at"),
+            if (o.isNull("client_msg_id")) null else o.optString("client_msg_id").ifBlank { null }
         )
 
-    fun sendMessage(conversationId: Long, content: String): ChatMessage =
-        parseMessage(postJson("/api/v1/agent/conversations/$conversationId/messages", JSONObject(mapOf("type" to "text", "content" to content))).getJSONObject("message"))
+    fun sendMessage(conversationId: Long, content: String, clientMsgId: String): ChatMessage =
+        parseMessage(postJson("/api/v1/agent/conversations/$conversationId/messages", JSONObject(mapOf("type" to "text", "content" to content, "client_msg_id" to clientMsgId))).getJSONObject("message"))
 
     fun uploadImage(context: Context, conversationId: Long, uri: Uri) {
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("无法读取图片")

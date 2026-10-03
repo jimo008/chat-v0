@@ -8,7 +8,8 @@ data class CustomerItem(
     val blocked: Boolean,
     val unreadCount: Int = 0,
     val ringingCount: Int = 0,
-    val lastMessage: String = ""
+    val lastMessage: String = "",
+    val lastMessageAt: String = ""
 )
 
 data class ChatMessage(
@@ -20,8 +21,9 @@ data class ChatMessage(
     val customerReadAt: String?,
     val attachmentId: Long?,
     val createdAt: String,
+    val clientMsgId: String? = null,
     val localStatus: String = "sent",
-    val localKey: String = id.toString()
+    val localKey: String = clientMsgId ?: id.toString()
 )
 
 data class ConversationDetail(

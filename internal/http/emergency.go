@@ -96,7 +96,7 @@ func (s *Server) customerEmergencyStart(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if createdCall {
-		message, err := s.insertTextMessage(r.Context(), tx, customer.SiteID, customer.ConversationID, "customer", customer.CustomerID, 0, "[紧急呼叫客服]")
+		message, err := s.insertTextMessage(r.Context(), tx, customer.SiteID, customer.ConversationID, "customer", customer.CustomerID, 0, "[紧急呼叫客服]", "")
 		if err != nil {
 			s.logger.Error("insert emergency message", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "emergency_message_failed"})
@@ -335,7 +335,7 @@ func (s *Server) acceptRingingForConversation(ctx context.Context, conversationI
 		); err != nil {
 			return 0, err
 		}
-		message, err := s.insertTextMessage(ctx, tx, c.SiteID, conversationID, "agent", 0, agentID, "客服已上线")
+		message, err := s.insertTextMessage(ctx, tx, c.SiteID, conversationID, "agent", 0, agentID, "客服已上线", "")
 		if err != nil {
 			return 0, err
 		}

@@ -554,15 +554,21 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     if (!content) return;
     textEl.value = "";
     setLoading(sendBtn, true, "发送中");
-    var localKey = "local-" + Date.now();
+    var localKey = "customer-" + Date.now() + "-" + Math.random().toString(16).slice(2);
     var pendingEl = null;
     var pending = {id:localKey, sender_type:"customer", type:"text", content:content, created_at:new Date().toISOString(), local_status:"发送中..."};
     var originalAppendMessage = appendMessage;
     appendMessage(pending);
     pendingEl = messagesEl.lastElementChild;
-    fetch(api + "/api/v1/customer/messages", {method:"POST", headers:authHeaders(), body:JSON.stringify({type:"text",content:content})})
+    fetch(api + "/api/v1/customer/messages", {method:"POST", headers:authHeaders(), body:JSON.stringify({type:"text",content:content,client_msg_id:localKey})})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
-      .then(function(){ loadConversation(); })
+      .then(function(data){
+        if (pendingEl) {
+          pendingEl.remove();
+          delete renderedMessages[localKey];
+        }
+        appendMessage(data.message);
+      })
       .catch(function(){
         pending.local_status = "发送失败";
         pending.retry = function(){ textEl.value = content; sendBtn.click(); };

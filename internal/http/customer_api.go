@@ -60,21 +60,21 @@ func (s *Server) customerConversation(w http.ResponseWriter, r *http.Request) {
 		beforeSeq = parsed
 	}
 
-	query := `SELECT id, sender_type, sender_customer_id, sender_agent_id, seq, type, content, attachment_id, customer_read_at, created_at
+	query := `SELECT id, sender_type, sender_customer_id, sender_agent_id, seq, client_msg_id, type, content, attachment_id, customer_read_at, created_at
 		 FROM messages
 		 WHERE conversation_id = ?
 		 ORDER BY created_at DESC, id DESC
 		 LIMIT ?`
 	args := []any{customer.ConversationID, limit}
 	if beforeSeq > 0 {
-		query = `SELECT id, sender_type, sender_customer_id, sender_agent_id, seq, type, content, attachment_id, customer_read_at, created_at
+		query = `SELECT id, sender_type, sender_customer_id, sender_agent_id, seq, client_msg_id, type, content, attachment_id, customer_read_at, created_at
 		 FROM messages
 		 WHERE conversation_id = ? AND seq < ?
 		 ORDER BY seq DESC
 		 LIMIT ?`
 		args = []any{customer.ConversationID, beforeSeq, limit}
 	} else if afterSeq > 0 {
-		query = `SELECT id, sender_type, sender_customer_id, sender_agent_id, seq, type, content, attachment_id, customer_read_at, created_at
+		query = `SELECT id, sender_type, sender_customer_id, sender_agent_id, seq, client_msg_id, type, content, attachment_id, customer_read_at, created_at
 		 FROM messages
 		 WHERE conversation_id = ? AND seq > ?
 		 ORDER BY seq ASC
@@ -98,13 +98,14 @@ func (s *Server) customerConversation(w http.ResponseWriter, r *http.Request) {
 			senderCustomerID sql.NullInt64
 			senderAgentID    sql.NullInt64
 			seq              uint64
+			clientMsgID      sql.NullString
 			messageType      string
 			content          sql.NullString
 			attachmentID     sql.NullInt64
 			customerReadAt   sql.NullTime
 			createdAt        sql.NullTime
 		)
-		if err := rows.Scan(&id, &senderType, &senderCustomerID, &senderAgentID, &seq, &messageType, &content, &attachmentID, &customerReadAt, &createdAt); err != nil {
+		if err := rows.Scan(&id, &senderType, &senderCustomerID, &senderAgentID, &seq, &clientMsgID, &messageType, &content, &attachmentID, &customerReadAt, &createdAt); err != nil {
 			s.logger.Error("scan customer message", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "message_scan_failed"})
 			return
@@ -115,6 +116,7 @@ func (s *Server) customerConversation(w http.ResponseWriter, r *http.Request) {
 			"sender_customer_id": nullableIntValue(senderCustomerID),
 			"sender_agent_id":    nullableIntValue(senderAgentID),
 			"seq":                seq,
+			"client_msg_id":      nullableStringValue(clientMsgID),
 			"type":               messageType,
 			"content":            nullableStringValue(content),
 			"attachment_id":      nullableIntValue(attachmentID),

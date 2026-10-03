@@ -269,8 +269,7 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
             } }
                 .onSuccess { latest ->
                     if (latest != null) {
-                        val existing = localMessages.map { it.id }.toSet()
-                        val merged = if (localMessages.isEmpty()) latest.messages else localMessages + latest.messages.filter { it.id !in existing }
+                        val merged = if (localMessages.isEmpty()) latest.messages else mergeMessages(localMessages + latest.messages)
                         detail = latest.copy(messages = merged)
                         localMessages = merged
                         prefs.setCachedConversation(customer.conversationId, conversationCacheJson(latest, merged))
@@ -296,10 +295,11 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
                     )
                 }
             }.onSuccess { older ->
-                val existing = localMessages.map { it.id }.toSet()
-                val incoming = older.messages.filter { it.id !in existing }
+                val beforeCount = localMessages.size
+                val merged = mergeMessages(older.messages + localMessages)
+                val incoming = merged.take((merged.size - beforeCount).coerceAtLeast(0))
                 if (incoming.isNotEmpty()) {
-                    localMessages = incoming + localMessages
+                    localMessages = merged
                     listState.scrollToItem(incoming.size)
                 }
             }.onFailure { status = it.message ?: "加载更早消息失败" }
@@ -339,18 +339,18 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
         if (existing) {
             localMessages = localMessages.map { if (it.localKey == localKey) it.copy(localStatus = "sending") else it }
         } else {
-            val pending = ChatMessage(-System.currentTimeMillis(), "agent", 0, "text", text, null, null, "", "sending", localKey)
+            val pending = ChatMessage(-System.currentTimeMillis(), "agent", 0, "text", text, null, null, "", localKey, "sending", localKey)
             localMessages = localMessages + pending
         }
         scope.launch {
             runCatching {
-                withContext(Dispatchers.IO) { AgentApi(prefs.baseUrl, prefs.token).sendMessage(customer.conversationId, text) }
+                withContext(Dispatchers.IO) { AgentApi(prefs.baseUrl, prefs.token).sendMessage(customer.conversationId, text, localKey) }
             }.onSuccess { sent ->
-                localMessages = localMessages.map { if (it.localKey == localKey) sent else it }
+                localMessages = mergeMessages(localMessages.map { if (it.localKey == localKey || it.clientMsgId == localKey) sent else it })
                 val mergedDetail = detail ?: ConversationDetail(customer.conversationId, customer.email, customer.siteName, customer.blocked, localMessages)
                 detail = mergedDetail.copy(messages = localMessages)
                 prefs.setCachedConversation(customer.conversationId, conversationCacheJson(mergedDetail, localMessages))
-                prefs.updateCachedCustomerPreview(customer.conversationId, text)
+                prefs.updateCachedCustomerPreview(customer.conversationId, text, lastMessageAt = sent.createdAt)
                 prefs.bumpCustomerListVersion()
             }
                 .onFailure {
@@ -517,6 +517,7 @@ fun conversationCacheJson(detail: ConversationDetail, messages: List<ChatMessage
                 if (m.customerReadAt == null) put("customer_read_at", JSONObject.NULL) else put("customer_read_at", m.customerReadAt)
                 if (m.attachmentId == null) put("attachment_id", JSONObject.NULL) else put("attachment_id", m.attachmentId)
                 put("created_at", m.createdAt)
+                if (m.clientMsgId == null) put("client_msg_id", JSONObject.NULL) else put("client_msg_id", m.clientMsgId)
             })
         }
     })
@@ -526,6 +527,28 @@ fun conversationCacheJson(detail: ConversationDetail, messages: List<ChatMessage
 fun formatTime(value: String): String {
     if (value.isBlank()) return "刚刚"
     return runCatching { OffsetDateTime.parse(value).format(DateTimeFormatter.ofPattern("HH:mm")) }.getOrDefault(value.take(16))
+}
+
+fun mergeMessages(messages: List<ChatMessage>): List<ChatMessage> {
+    val byServerId = LinkedHashMap<Long, ChatMessage>()
+    val byClientId = LinkedHashMap<String, ChatMessage>()
+    val result = mutableListOf<ChatMessage>()
+    messages.sortedWith(compareBy<ChatMessage> { if (it.seq > 0) it.seq else Long.MAX_VALUE }.thenBy { it.id }).forEach { message ->
+        val existingIndex = when {
+            message.id > 0 && byServerId.containsKey(message.id) -> result.indexOf(byServerId[message.id])
+            message.clientMsgId != null && byClientId.containsKey(message.clientMsgId) -> result.indexOf(byClientId[message.clientMsgId])
+            else -> -1
+        }
+        if (existingIndex >= 0) {
+            val existing = result[existingIndex]
+            result[existingIndex] = if (message.id > 0 || message.seq > 0 || existing.id <= 0) message else existing
+        } else {
+            result.add(message)
+        }
+        if (message.id > 0) byServerId[message.id] = message
+        message.clientMsgId?.let { byClientId[it] = message }
+    }
+    return result
 }
 
 fun deviceId(context: android.content.Context): String = "android-" + Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)

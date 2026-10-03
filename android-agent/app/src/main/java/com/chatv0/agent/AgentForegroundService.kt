@@ -141,7 +141,7 @@ class AgentForegroundService : Service() {
                             "image" -> "[图片消息]"
                             else -> payload.optString("content")
                         }
-                        prefs.updateCachedCustomerPreview(conversationId, preview, if (payload.optString("sender_type") == "customer") 1 else 0)
+                        prefs.updateCachedCustomerPreview(conversationId, preview, if (payload.optString("sender_type") == "customer") 1 else 0, lastMessageAt = payload.optString("created_at"))
                     }
                     if (payload?.optString("sender_type") == "customer") {
                         val content = when (payload.optString("type")) {

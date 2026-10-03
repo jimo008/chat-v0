@@ -11,8 +11,9 @@ import (
 )
 
 type sendMessageRequest struct {
-	Type    string `json:"type"`
-	Content string `json:"content"`
+	Type        string `json:"type"`
+	Content     string `json:"content"`
+	ClientMsgID string `json:"client_msg_id"`
 }
 
 func (s *Server) customerSendMessage(w http.ResponseWriter, r *http.Request) {
@@ -48,16 +49,18 @@ func (s *Server) customerSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	message, err := s.insertTextMessage(r.Context(), tx, customer.SiteID, customer.ConversationID, "customer", customer.CustomerID, 0, content)
+	message, err := s.insertTextMessage(r.Context(), tx, customer.SiteID, customer.ConversationID, "customer", customer.CustomerID, 0, content, strings.TrimSpace(req.ClientMsgID))
 	if err != nil {
 		s.logger.Error("insert customer message", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "message_insert_failed"})
 		return
 	}
-	if _, _, err := createEvent(r.Context(), tx, customer.SiteID, "MESSAGE_CREATED", message); err != nil {
-		s.logger.Error("customer message event", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "message_event_failed"})
-		return
+	if !message.Existing {
+		if _, _, err := createEvent(r.Context(), tx, customer.SiteID, "MESSAGE_CREATED", message); err != nil {
+			s.logger.Error("customer message event", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "message_event_failed"})
+			return
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		s.logger.Error("commit customer message", "error", err)
@@ -111,21 +114,23 @@ func (s *Server) agentSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	message, err := s.insertTextMessage(r.Context(), tx, siteID, conversationID, "agent", 0, agent.AgentID, content)
+	message, err := s.insertTextMessage(r.Context(), tx, siteID, conversationID, "agent", 0, agent.AgentID, content, strings.TrimSpace(req.ClientMsgID))
 	if err != nil {
 		s.logger.Error("insert agent message", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "message_insert_failed"})
 		return
 	}
-	if _, _, err := createEvent(r.Context(), tx, siteID, "MESSAGE_CREATED", message); err != nil {
-		s.logger.Error("agent message event", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "message_event_failed"})
-		return
-	}
-	if err := s.ensureEmailBatch(r.Context(), tx, siteID, conversationID, message.ID); err != nil {
-		s.logger.Error("ensure email batch", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "email_batch_failed"})
-		return
+	if !message.Existing {
+		if _, _, err := createEvent(r.Context(), tx, siteID, "MESSAGE_CREATED", message); err != nil {
+			s.logger.Error("agent message event", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "message_event_failed"})
+			return
+		}
+		if err := s.ensureEmailBatch(r.Context(), tx, siteID, conversationID, message.ID); err != nil {
+			s.logger.Error("ensure email batch", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "email_batch_failed"})
+			return
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		s.logger.Error("commit agent message", "error", err)
@@ -144,13 +149,22 @@ type messageDTO struct {
 	SenderCustomerID any       `json:"sender_customer_id"`
 	SenderAgentID    any       `json:"sender_agent_id"`
 	Seq              uint64    `json:"seq"`
+	ClientMsgID      any       `json:"client_msg_id"`
 	Type             string    `json:"type"`
 	Content          string    `json:"content"`
 	AttachmentID     any       `json:"attachment_id"`
 	CreatedAt        time.Time `json:"created_at"`
+	Existing         bool      `json:"-"`
 }
 
-func (s *Server) insertTextMessage(ctx context.Context, tx *sql.Tx, siteID, conversationID uint64, senderType string, customerID, agentID uint64, content string) (messageDTO, error) {
+func (s *Server) insertTextMessage(ctx context.Context, tx *sql.Tx, siteID, conversationID uint64, senderType string, customerID, agentID uint64, content, clientMsgID string) (messageDTO, error) {
+	if clientMsgID != "" {
+		if existing, ok, err := s.findMessageByClientMsgID(ctx, tx, siteID, clientMsgID); err != nil {
+			return messageDTO{}, err
+		} else if ok {
+			return existing, nil
+		}
+	}
 	seq, err := nextSequence(ctx, tx, "messages")
 	if err != nil {
 		return messageDTO{}, err
@@ -163,17 +177,22 @@ func (s *Server) insertTextMessage(ctx context.Context, tx *sql.Tx, siteID, conv
 	if agentID != 0 {
 		senderAgentID = sql.NullInt64{Int64: int64(agentID), Valid: true}
 	}
+	clientMsg := sql.NullString{}
+	if clientMsgID != "" {
+		clientMsg = sql.NullString{String: clientMsgID, Valid: true}
+	}
 	result, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO messages
-		   (site_id, conversation_id, sender_type, sender_customer_id, sender_agent_id, seq, type, content)
-		 VALUES (?, ?, ?, ?, ?, ?, 'text', ?)`,
+		   (site_id, conversation_id, sender_type, sender_customer_id, sender_agent_id, seq, client_msg_id, type, content)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 'text', ?)`,
 		siteID,
 		conversationID,
 		senderType,
 		senderCustomerID,
 		senderAgentID,
 		seq,
+		clientMsg,
 		content,
 	)
 	if err != nil {
@@ -194,11 +213,49 @@ func (s *Server) insertTextMessage(ctx context.Context, tx *sql.Tx, siteID, conv
 		SenderCustomerID: nullableIntValue(senderCustomerID),
 		SenderAgentID:    nullableIntValue(senderAgentID),
 		Seq:              seq,
+		ClientMsgID:      nullableStringValue(clientMsg),
 		Type:             "text",
 		Content:          content,
 		AttachmentID:     nil,
 		CreatedAt:        time.Now().In(appTimeLocation),
 	}, nil
+}
+
+func (s *Server) findMessageByClientMsgID(ctx context.Context, tx *sql.Tx, siteID uint64, clientMsgID string) (messageDTO, bool, error) {
+	var (
+		msg              messageDTO
+		senderCustomerID sql.NullInt64
+		senderAgentID    sql.NullInt64
+		clientMsg        sql.NullString
+		content          sql.NullString
+		attachmentID     sql.NullInt64
+		createdAt        sql.NullTime
+	)
+	err := tx.QueryRowContext(
+		ctx,
+		`SELECT id, site_id, conversation_id, sender_type, sender_customer_id, sender_agent_id, seq, client_msg_id, type, content, attachment_id, created_at
+		 FROM messages
+		 WHERE site_id = ? AND client_msg_id = ?
+		 LIMIT 1`,
+		siteID,
+		clientMsgID,
+	).Scan(&msg.ID, &msg.SiteID, &msg.ConversationID, &msg.SenderType, &senderCustomerID, &senderAgentID, &msg.Seq, &clientMsg, &msg.Type, &content, &attachmentID, &createdAt)
+	if err == sql.ErrNoRows {
+		return messageDTO{}, false, nil
+	}
+	if err != nil {
+		return messageDTO{}, false, err
+	}
+	msg.SenderCustomerID = nullableIntValue(senderCustomerID)
+	msg.SenderAgentID = nullableIntValue(senderAgentID)
+	msg.ClientMsgID = nullableStringValue(clientMsg)
+	msg.Content = nullableStringValue(content).(string)
+	msg.AttachmentID = nullableIntValue(attachmentID)
+	if createdAt.Valid {
+		msg.CreatedAt = createdAt.Time.In(appTimeLocation)
+	}
+	msg.Existing = true
+	return msg, true, nil
 }
 
 func (s *Server) insertImageMessage(ctx context.Context, tx *sql.Tx, siteID, conversationID uint64, senderType string, customerID, agentID, attachmentID uint64) (messageDTO, error) {
@@ -245,6 +302,7 @@ func (s *Server) insertImageMessage(ctx context.Context, tx *sql.Tx, siteID, con
 		SenderCustomerID: nullableIntValue(senderCustomerID),
 		SenderAgentID:    nullableIntValue(senderAgentID),
 		Seq:              seq,
+		ClientMsgID:      nil,
 		Type:             "image",
 		Content:          "",
 		AttachmentID:     attachmentID,

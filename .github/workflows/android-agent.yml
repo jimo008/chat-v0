@@ -10,6 +10,9 @@ on:
       - ".github/workflows/android-agent.yml"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -34,8 +37,20 @@ jobs:
       - name: Build debug APK
         run: gradle :android-agent:app:assembleDebug
 
+      - name: Prepare latest APK
+        run: |
+          mkdir -p release
+          cp android-agent/app/build/outputs/apk/debug/*.apk release/support-agent-latest.apk
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: chat-v0-agent-debug-apk
-          path: android-agent/app/build/outputs/apk/debug/*.apk
+          path: release/support-agent-latest.apk
+
+      - name: Publish fixed latest APK link
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view android-latest >/dev/null 2>&1 || gh release create android-latest --title "Android Agent Latest" --notes "Latest debug APK for testing."
+          gh release upload android-latest release/support-agent-latest.apk --clobber

@@ -25,6 +25,21 @@ class AgentPrefs(context: Context) {
         get() = prefs.getBoolean("accept_emergency", false)
         set(value) = prefs.edit().putBoolean("accept_emergency", value).apply()
 
+    var customerListVersion: Long
+        get() = prefs.getLong("customer_list_version", 0L)
+        set(value) = prefs.edit().putLong("customer_list_version", value).apply()
+
+    fun bumpCustomerListVersion() {
+        prefs.edit().putLong("customer_list_version", customerListVersion + 1).apply()
+    }
+
+    fun cachedCustomers(): String =
+        prefs.getString("customers_json", "") ?: ""
+
+    fun setCachedCustomers(json: String) {
+        prefs.edit().putString("customers_json", json).apply()
+    }
+
     fun cachedConversation(conversationId: Long): String =
         prefs.getString("conversation_$conversationId", "") ?: ""
 
@@ -33,6 +48,6 @@ class AgentPrefs(context: Context) {
     }
 
     fun clearAuth() {
-        prefs.edit().remove("token").remove("last_seq").apply()
+        prefs.edit().remove("token").remove("last_seq").remove("customers_json").apply()
     }
 }

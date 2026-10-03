@@ -133,6 +133,7 @@ class AgentForegroundService : Service() {
             when (event.optString("type")) {
                 "MESSAGE_CREATED" -> {
                     val payload = event.optJSONObject("payload") ?: event.optJSONObject("payload_json")
+                    prefs.bumpCustomerListVersion()
                     if (payload?.optString("sender_type") == "customer") {
                         val conversationId = payload.optLong("conversation_id", 0L)
                         val content = when (payload.optString("type")) {
@@ -144,10 +145,12 @@ class AgentForegroundService : Service() {
                 }
                 "EMERGENCY_STARTED" -> {
                     val payload = event.optJSONObject("payload") ?: event.optJSONObject("payload_json")
+                    prefs.bumpCustomerListVersion()
                     val email = payload?.optString("customer_email").orEmpty()
                     notifyEmergency(if (email.isBlank()) "有客户正在紧急呼叫" else "$email 正在紧急呼叫")
                 }
                 "EMERGENCY_ACCEPTED", "EMERGENCY_CANCELLED", "EMERGENCY_EXPIRED" -> {
+                    prefs.bumpCustomerListVersion()
                     stopEmergencyRing()
                     (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(3)
                 }

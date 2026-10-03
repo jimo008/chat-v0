@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -125,19 +126,41 @@ fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (Custo
     var customers by remember { mutableStateOf<List<CustomerItem>>(emptyList()) }
     var status by remember { mutableStateOf("加载中") }
     var duty by remember { mutableStateOf(prefs.acceptEmergency) }
+    var seenListVersion by remember { mutableStateOf(prefs.customerListVersion) }
 
     fun refresh() {
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { AgentApi(prefs.baseUrl, prefs.token).customers() } }
-                .onSuccess { customers = it; status = "共 ${it.size} 个客户" }
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val api = AgentApi(prefs.baseUrl, prefs.token)
+                    val json = api.customersJson()
+                    prefs.setCachedCustomers(json.toString())
+                    api.parseCustomers(json)
+                }
+            }
+                .onSuccess { customers = it; seenListVersion = prefs.customerListVersion; status = "共 ${it.size} 个客户" }
                 .onFailure { status = it.message ?: "加载失败" }
         }
     }
     LaunchedEffect(Unit) {
         onStartService()
+        val cached = prefs.cachedCustomers()
+        if (cached.isNotBlank()) {
+            runCatching { AgentApi(prefs.baseUrl, prefs.token).parseCustomers(JSONObject(cached)) }
+                .onSuccess { customers = it; status = "共 ${it.size} 个客户" }
+        }
         while (true) {
-            refresh()
+            val currentVersion = prefs.customerListVersion
+            if (currentVersion != seenListVersion || customers.isEmpty()) {
+                refresh()
+            }
             delay(3000)
+        }
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(60000)
+            refresh()
         }
     }
 

@@ -23,7 +23,13 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
     }
 
     fun customers(): List<CustomerItem> {
-        val arr = getJson("/api/v1/agent/customers").optJSONArray("customers") ?: JSONArray()
+        return parseCustomers(customersJson())
+    }
+
+    fun customersJson(): JSONObject = getJson("/api/v1/agent/customers")
+
+    fun parseCustomers(root: JSONObject): List<CustomerItem> {
+        val arr = root.optJSONArray("customers") ?: JSONArray()
         return (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
             CustomerItem(

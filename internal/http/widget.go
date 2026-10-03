@@ -260,6 +260,8 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var emergencyTextEl = document.getElementById("emergencyText");
   var cancelEmergencyBtn = document.getElementById("cancelEmergency");
   var lastReadSeq = 0;
+  var maxMessageSeq = 0;
+  var renderedMessages = {};
   var seenAgentSeq = Number(localStorage.getItem("chat_v0_seen_agent_seq_" + site) || "0");
   var unreadCount = 0;
   var countedAgentSeqs = {};
@@ -277,7 +279,14 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     var cls = "system" + (kind ? " " + kind : "");
     messagesEl.innerHTML = '<div class="' + cls + '">' + escapeHTML(text) + '</div>';
   }
+  function clearOnlySystem(){
+    if (messagesEl.children.length === 1 && messagesEl.children[0].classList.contains("system")) messagesEl.innerHTML = "";
+  }
   function appendMessage(msg){
+    if (msg.id && renderedMessages[msg.id]) return;
+    if (msg.id) renderedMessages[msg.id] = true;
+    if (msg.seq && msg.seq > maxMessageSeq) maxMessageSeq = msg.seq;
+    clearOnlySystem();
     var div = document.createElement("div");
     div.className = "msg " + (msg.sender_type === "customer" ? "customer" : "agent");
     var body = document.createElement("div");
@@ -426,16 +435,22 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   minimizeBtn.onclick = function(){ setOpen(false); };
   function showAuthed(){ authEl.classList.add("hidden"); composerEl.classList.toggle("hidden", emergencyActive); }
   function showAuth(){ composerEl.classList.add("hidden"); authEl.classList.remove("hidden"); }
-  function loadConversation(){
+  function loadConversation(incremental){
     if (!token) { showAuth(); addSystem("请先验证邮箱"); return; }
-    fetch(api + "/api/v1/customer/conversation", {headers: authHeaders()}).then(function(r){
+    var url = api + "/api/v1/customer/conversation";
+    if (incremental && maxMessageSeq > 0) url += "?after_seq=" + encodeURIComponent(maxMessageSeq);
+    fetch(url, {headers: authHeaders()}).then(function(r){
       if (r.status === 401) { token = ""; localStorage.removeItem(tokenKey); showAuth(); addSystem("请先验证邮箱"); return null; }
       return r.json();
     }).then(function(data){
       if (!data) return;
-      messagesEl.innerHTML = "";
+      if (!incremental) {
+        messagesEl.innerHTML = "";
+        renderedMessages = {};
+        maxMessageSeq = 0;
+      }
       (data.messages || []).forEach(appendMessage);
-      if ((data.messages || []).length === 0) addSystem("可以开始聊天了");
+      if (!incremental && (data.messages || []).length === 0) addSystem("可以开始聊天了");
       showAuthed();
       if (canMarkRead()) {
         if (lastReadSeq) {
@@ -454,7 +469,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   }
   document.addEventListener("visibilitychange", sendRead);
   window.addEventListener("focus", sendRead);
-  setInterval(function(){ if(token) loadConversation(); }, 3000);
+  setInterval(function(){ if(token) loadConversation(true); }, 3000);
   sendCodeBtn.onclick = function(){
     setLoading(sendCodeBtn, true, "发送中");
     fetch(api + "/api/v1/customer/email/send-code", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,email:emailEl.value})})

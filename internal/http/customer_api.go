@@ -41,17 +41,32 @@ func (s *Server) customerConversation(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = parsed
 	}
+	afterSeq := uint64(0)
+	if raw := r.URL.Query().Get("after_seq"); raw != "" {
+		parsed, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_after_seq"})
+			return
+		}
+		afterSeq = parsed
+	}
 
-	rows, err := s.db.QueryContext(
-		r.Context(),
-		`SELECT id, sender_type, sender_customer_id, sender_agent_id, seq, type, content, attachment_id, customer_read_at, created_at
+	query := `SELECT id, sender_type, sender_customer_id, sender_agent_id, seq, type, content, attachment_id, customer_read_at, created_at
 		 FROM messages
 		 WHERE conversation_id = ?
 		 ORDER BY created_at DESC, id DESC
-		 LIMIT ?`,
-		customer.ConversationID,
-		limit,
-	)
+		 LIMIT ?`
+	args := []any{customer.ConversationID, limit}
+	if afterSeq > 0 {
+		query = `SELECT id, sender_type, sender_customer_id, sender_agent_id, seq, type, content, attachment_id, customer_read_at, created_at
+		 FROM messages
+		 WHERE conversation_id = ? AND seq > ?
+		 ORDER BY seq ASC
+		 LIMIT ?`
+		args = []any{customer.ConversationID, afterSeq, limit}
+	}
+
+	rows, err := s.db.QueryContext(r.Context(), query, args...)
 	if err != nil {
 		s.logger.Error("customer messages", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "messages_failed"})
@@ -97,7 +112,9 @@ func (s *Server) customerConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reverseMessages(messages)
+	if afterSeq == 0 {
+		reverseMessages(messages)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"conversation": map[string]any{
 			"id": customer.ConversationID,

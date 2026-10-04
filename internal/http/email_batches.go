@@ -8,20 +8,24 @@ import (
 
 func (s *Server) ensureEmailBatch(ctx context.Context, tx *sql.Tx, siteID, conversationID, messageID uint64) error {
 	var customerID uint64
+	var customerEmail string
 	var entryType sql.NullString
 	var entryURL sql.NullString
 	err := tx.QueryRowContext(
 		ctx,
-		`SELECT c.id, c.last_support_entry_type, c.last_support_entry_url
+		`SELECT c.id, c.email_original, c.last_support_entry_type, c.last_support_entry_url
 		 FROM conversations conv
 		 JOIN customers c ON c.id = conv.customer_id
 		 WHERE conv.id = ? AND conv.site_id = ?
 		 LIMIT 1`,
 		conversationID,
 		siteID,
-	).Scan(&customerID, &entryType, &entryURL)
+	).Scan(&customerID, &customerEmail, &entryType, &entryURL)
 	if err != nil {
 		return err
+	}
+	if !looksLikeEmail(customerEmail) {
+		return nil
 	}
 
 	var batchID uint64

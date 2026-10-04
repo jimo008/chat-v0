@@ -254,12 +254,19 @@ func (s *Server) sendVerificationEmail(siteName, to, code string) error {
 }
 
 func randomCode() (string, error) {
-	max := big.NewInt(1000000)
+	return randomDigits(6)
+}
+
+func randomDigits(length int) (string, error) {
+	max := big.NewInt(1)
+	for i := 0; i < length; i++ {
+		max.Mul(max, big.NewInt(10))
+	}
 	n, err := rand.Int(rand.Reader, max)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%06d", n.Int64()), nil
+	return fmt.Sprintf("%0*d", length, n.Int64()), nil
 }
 
 func clientIP(r *http.Request) string {

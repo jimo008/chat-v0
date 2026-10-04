@@ -214,11 +214,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   <div class="panel">
     <div class="header"><div class="headerMain"><button id="minimize" class="minBtn" title="最小化">×</button><span>在线客服</span></div><span class="site">__SITE_NAME__</span></div>
     <div id="messages" class="messages"><div class="system">正在初始化...</div></div>
-    <div id="auth" class="auth hidden">
-      <div class="muted">请输入邮箱验证后开始聊天。</div>
-      <div class="row"><input id="email" placeholder="邮箱"><button id="sendCode">发送验证码</button></div>
-      <div class="row"><input id="code" placeholder="6 位验证码"><button id="verifyCode">进入客服</button></div>
-    </div>
+    <div id="auth" class="auth hidden"></div>
     <div id="composer" class="composer hidden">
       <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp" class="hidden">
       <div class="row"><input id="text" placeholder="输入消息..."><button id="imageBtn" class="imageBtn" title="发送图片">图片</button><button id="send">发送</button></div>
@@ -247,12 +243,8 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var lightboxImgEl = document.getElementById("lightboxImg");
   var authEl = document.getElementById("auth");
   var composerEl = document.getElementById("composer");
-  var emailEl = document.getElementById("email");
-  var codeEl = document.getElementById("code");
   var textEl = document.getElementById("text");
   var imageInputEl = document.getElementById("imageInput");
-  var sendCodeBtn = document.getElementById("sendCode");
-  var verifyCodeBtn = document.getElementById("verifyCode");
   var sendBtn = document.getElementById("send");
   var imageBtn = document.getElementById("imageBtn");
   var emergencyBtn = document.getElementById("emergency");
@@ -273,8 +265,6 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var emergencyTimer = null;
   var emergencyStatusTimer = null;
   var emergencyActive = false;
-  var codeTimer = null;
-  var codeCountdown = 0;
   var loadingOlder = false;
   var initialScrollLocked = false;
   var allowOlderLoad = false;
@@ -384,15 +374,6 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   function openImage(src){ lightboxImgEl.src = src; lightboxEl.style.display = "flex"; lightboxEl.classList.remove("hidden"); }
   lightboxEl.onclick = function(){ lightboxEl.style.display = "none"; lightboxEl.classList.add("hidden"); lightboxImgEl.src = ""; };
   function escapeHTML(text){ return String(text).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]); }); }
-  function errorMessage(data, fallback){
-    var code = data && data.error;
-    if (code === "send_too_frequent") return "验证码发送过于频繁，请 60 秒后再试";
-    if (code === "smtp_not_configured" || code === "email_send_failed") return "验证码邮件发送失败，请联系网站管理员检查 SMTP 配置";
-    if (code === "site_not_found") return "客服站点不存在，请检查嵌入代码";
-    if (code === "site_email_required") return "请输入正确邮箱";
-    if (code === "rate_check_failed" || code === "code_store_failed") return "验证码服务暂时不可用，请稍后再试";
-    return fallback;
-  }
   function imageErrorMessage(data){
     var code = data && data.error;
     var status = data && data.status;
@@ -420,23 +401,16 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     if (btn.dataset.originalText) btn.textContent = btn.dataset.originalText;
     delete btn.dataset.originalText;
   }
-  function startCodeCountdown(seconds){
-    codeCountdown = seconds;
-    if (codeTimer) clearInterval(codeTimer);
-    sendCodeBtn.disabled = true;
-    sendCodeBtn.classList.remove("loading");
-    sendCodeBtn.textContent = codeCountdown + "秒后重发";
-    codeTimer = setInterval(function(){
-      codeCountdown--;
-      if (codeCountdown <= 0) {
-        clearInterval(codeTimer);
-        codeTimer = null;
-        sendCodeBtn.disabled = false;
-        sendCodeBtn.textContent = "发送验证码";
-        return;
-      }
-      sendCodeBtn.textContent = codeCountdown + "秒后重发";
-    }, 1000);
+  function ensureGuestSession(){
+    if (token) return Promise.resolve(token);
+    addSystem("正在接入客服...");
+    return fetch(api + "/api/v1/customer/guest-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,last_support_entry_type:"web",last_support_entry_url:entryURL})})
+      .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
+      .then(function(data){
+        token = data.token;
+        localStorage.setItem(tokenKey, token);
+        return token;
+      });
   }
   function authHeaders(){ return token ? {"Authorization":"Bearer " + token, "Content-Type":"application/json"} : {"Content-Type":"application/json"}; }
   function scrollToBottom(){ messagesEl.scrollTop = messagesEl.scrollHeight; }
@@ -489,13 +463,13 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   launcherEl.onclick = function(){ setOpen(true); };
   minimizeBtn.onclick = function(){ setOpen(false); };
   function showAuthed(){ authEl.classList.add("hidden"); composerEl.classList.toggle("hidden", emergencyActive); }
-  function showAuth(){ composerEl.classList.add("hidden"); authEl.classList.remove("hidden"); }
+  function showAuth(){ authEl.classList.add("hidden"); composerEl.classList.add("hidden"); ensureGuestSession().then(function(){ loadConversation(); }).catch(function(){ addSystem("连接客服失败"); }); }
   function loadConversation(incremental){
-    if (!token) { showAuth(); addSystem("请先验证邮箱"); return; }
+    if (!token) { showAuth(); return; }
     var url = api + "/api/v1/customer/conversation";
     if (incremental && maxMessageSeq > 0) url += "?after_seq=" + encodeURIComponent(maxMessageSeq);
     fetch(url, {headers: authHeaders()}).then(function(r){
-      if (r.status === 401) { token = ""; localStorage.removeItem(tokenKey); showAuth(); addSystem("请先验证邮箱"); return null; }
+      if (r.status === 401) { token = ""; localStorage.removeItem(tokenKey); showAuth(); return null; }
       return r.json();
     }).then(function(data){
       if (!data) return;
@@ -544,21 +518,6 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   document.addEventListener("visibilitychange", scheduleRead);
   window.addEventListener("focus", scheduleRead);
   setInterval(function(){ if(token) loadConversation(true); }, 3000);
-  sendCodeBtn.onclick = function(){
-    setLoading(sendCodeBtn, true, "发送中");
-    fetch(api + "/api/v1/customer/email/send-code", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,email:emailEl.value})})
-      .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
-      .then(function(data){ addSystem("验证码已发送，请打开邮箱查看 6 位验证码。", "success"); startCodeCountdown(data.resend_after_seconds || 60); })
-      .catch(function(data){ setLoading(sendCodeBtn, false); addSystem(errorMessage(data, "验证码发送失败或过于频繁"), "error"); if(data && data.error === "send_too_frequent") startCodeCountdown(60); });
-  };
-  verifyCodeBtn.onclick = function(){
-    setLoading(verifyCodeBtn, true, "进入中");
-    fetch(api + "/api/v1/customer/email/verify", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,email:emailEl.value,code:codeEl.value,last_support_entry_type:"web",last_support_entry_url:entryURL})})
-      .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
-      .then(function(data){ token = data.token; localStorage.setItem(tokenKey, token); loadConversation(); })
-      .catch(function(){ addSystem("验证码错误或已过期"); })
-      .finally(function(){ setLoading(verifyCodeBtn, false); });
-  };
   sendBtn.onclick = function(){
     var content = textEl.value.trim();
     if (!content) return;
@@ -672,7 +631,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     console.info("[chat-v0] iframe received xboard identity", data.source || "unknown", id);
     fetch(api + "/api/v1/customer/xboard-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,xboard_user_id:String(id.xboard_user_id || id.id || id.user_id || id.uuid || ""),email:id.email || "",plan:id.plan || id.subscription || "",expire_time:id.expire_time || id.expired_at || null,used_traffic:id.used_traffic || null,all_traffic:id.all_traffic || null,raw_profile:id.raw_profile || id,last_support_entry_type:"web",last_support_entry_url:entryURL})})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
-      .then(function(data){ console.info("[chat-v0] xboard login success", data.customer); token = data.token; localStorage.setItem(tokenKey, token); if (id.email) emailEl.value = id.email; showAuthed(); loadConversation(); })
+      .then(function(data){ console.info("[chat-v0] xboard login success", data.customer); token = data.token; localStorage.setItem(tokenKey, token); showAuthed(); loadConversation(); })
       .catch(function(err){ console.info("[chat-v0] xboard login failed", err); if(!token) showAuth(); });
   });
   setOpen(false);

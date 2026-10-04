@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"database/sql"
+	"net/mail"
 	"strings"
 	"time"
 )
@@ -29,6 +30,15 @@ func (s *Server) findSiteByKey(ctx context.Context, siteKey string) (siteRecord,
 
 func normalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
+}
+
+func looksLikeEmail(email string) bool {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return false
+	}
+	addr, err := mail.ParseAddress(email)
+	return err == nil && strings.EqualFold(addr.Address, email)
 }
 
 func nullableString(value string) sql.NullString {

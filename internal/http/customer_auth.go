@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -26,6 +27,120 @@ type xboardLoginRequest struct {
 	LastSupportEntryType string          `json:"last_support_entry_type"`
 	LastSupportEntryURL  string          `json:"last_support_entry_url"`
 	DeviceLabel          string          `json:"device_label"`
+}
+
+type guestLoginRequest struct {
+	SiteKey              string `json:"site_key"`
+	LastSupportEntryType string `json:"last_support_entry_type"`
+	LastSupportEntryURL  string `json:"last_support_entry_url"`
+	DeviceLabel          string `json:"device_label"`
+}
+
+func (s *Server) customerGuestLogin(w http.ResponseWriter, r *http.Request) {
+	var req guestLoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
+		return
+	}
+	siteKey := strings.TrimSpace(req.SiteKey)
+	if siteKey == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "site_required"})
+		return
+	}
+	site, err := s.findSiteByKey(r.Context(), siteKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "site_not_found"})
+		return
+	}
+	if err != nil {
+		s.logger.Error("find guest site", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "site_lookup_failed"})
+		return
+	}
+
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "guest_login_failed"})
+		return
+	}
+	defer tx.Rollback()
+
+	customerID, displayName, err := s.createGuestCustomer(r.Context(), tx, site.ID)
+	if err != nil {
+		s.logger.Error("create guest customer", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "guest_customer_failed"})
+		return
+	}
+	if err := s.updateLastSupportEntry(r.Context(), tx, customerID, req.LastSupportEntryType, req.LastSupportEntryURL); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "support_entry_failed"})
+		return
+	}
+	conversationID, err := s.ensureConversation(r.Context(), tx, site.ID, customerID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "conversation_failed"})
+		return
+	}
+	token, err := security.NewToken(32)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "token_failed"})
+		return
+	}
+	if _, err := tx.ExecContext(
+		r.Context(),
+		`INSERT INTO customer_tokens (site_id, customer_id, token_hash, device_label, last_used_at)
+		 VALUES (?, ?, ?, ?, NOW(3))`,
+		site.ID,
+		customerID,
+		security.TokenHash(token),
+		nullableString(strings.TrimSpace(req.DeviceLabel)),
+	); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "token_store_failed"})
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "guest_login_commit_failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"customer": map[string]any{
+			"id":              customerID,
+			"site_id":         site.ID,
+			"site_key":        site.SiteKey,
+			"email":           displayName,
+			"guest":           true,
+			"conversation_id": conversationID,
+		},
+		"token": token,
+	})
+}
+
+func (s *Server) createGuestCustomer(ctx context.Context, tx *sql.Tx, siteID uint64) (uint64, string, error) {
+	for i := 0; i < 8; i++ {
+		digits, err := randomDigits(8)
+		if err != nil {
+			return 0, "", err
+		}
+		displayName := "游客" + digits
+		normalized := "guest:" + digits
+		result, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO customers (site_id, normalized_email, email_original, last_active_at)
+			 VALUES (?, ?, ?, NOW(3))`,
+			siteID,
+			normalized,
+			displayName,
+		)
+		if err == nil {
+			id, err := result.LastInsertId()
+			return uint64(id), displayName, err
+		}
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			continue
+		}
+		return 0, "", err
+	}
+	return 0, "", fmt.Errorf("guest_id_exhausted")
 }
 
 func (s *Server) customerXBoardLogin(w http.ResponseWriter, r *http.Request) {

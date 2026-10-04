@@ -278,6 +278,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var loadingOlder = false;
   var initialScrollLocked = false;
   var allowOlderLoad = false;
+  var readTimer = null;
 
   function addSystem(text, kind){
     var cls = "system" + (kind ? " " + kind : "");
@@ -319,7 +320,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
         countedAgentSeqs[msg.seq] = true;
         unreadCount++;
       }
-      setTimeout(sendRead, 2100);
+      scheduleRead();
     }
     updateBadge();
   }
@@ -446,7 +447,15 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     setTimeout(scrollToBottom, 260);
   }
   function canMarkRead(){
-    return token && lastReadSeq && opened && !document.hidden && document.hasFocus() && panelVisibleSince > 0 && Date.now() - Math.max(panelVisibleSince, lastAgentArrivedAt) >= 2000;
+    return token && lastReadSeq && opened && document.visibilityState === "visible" && panelVisibleSince > 0 && isNearBottom() && Date.now() - Math.max(panelVisibleSince, lastAgentArrivedAt) >= 2000;
+  }
+  function isNearBottom(){
+    return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 80;
+  }
+  function scheduleRead(){
+    if (readTimer) clearTimeout(readTimer);
+    if (!token || !opened || !lastReadSeq) return;
+    readTimer = setTimeout(sendRead, 2200);
   }
   function setOpen(next){
     opened = next;
@@ -454,7 +463,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     launcherEl.classList.toggle("hidden", opened);
     document.querySelector(".panel").classList.toggle("hidden", !opened);
     window.parent.postMessage({type:"chat-v0:resize", open: opened}, "*");
-    if (opened) setTimeout(sendRead, 2100);
+    if (opened) scheduleRead();
     if (opened && canMarkRead()) {
       unreadCount = 0;
       if (lastReadSeq) {
@@ -469,6 +478,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
       unreadCount = 0;
       updateBadge();
       scrollToBottomSoon();
+      scheduleRead();
     }
   }
   function updateBadge(){
@@ -511,7 +521,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
           countedAgentSeqs = {};
         }
         updateBadge();
-        sendRead();
+        scheduleRead();
       }
     }).catch(function(){ addSystem("连接客服失败"); showAuth(); });
   }
@@ -530,9 +540,9 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
       .catch(function(){})
       .finally(function(){ loadingOlder = false; });
   }
-  messagesEl.addEventListener("scroll", function(){ if (opened && allowOlderLoad && messagesEl.scrollTop < 32) loadOlder(); });
-  document.addEventListener("visibilitychange", sendRead);
-  window.addEventListener("focus", sendRead);
+  messagesEl.addEventListener("scroll", function(){ if (opened && allowOlderLoad && messagesEl.scrollTop < 32) loadOlder(); if (opened && isNearBottom()) scheduleRead(); });
+  document.addEventListener("visibilitychange", scheduleRead);
+  window.addEventListener("focus", scheduleRead);
   setInterval(function(){ if(token) loadConversation(true); }, 3000);
   sendCodeBtn.onclick = function(){
     setLoading(sendCodeBtn, true, "发送中");

@@ -62,9 +62,20 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
         val conv = root.getJSONObject("conversation")
         val customer = conv.getJSONObject("customer")
         val site = conv.getJSONObject("site")
+        val readState = root.optJSONObject("read_state")
         val arr = root.optJSONArray("messages") ?: JSONArray()
         val messages = (0 until arr.length()).map { i -> parseMessage(arr.getJSONObject(i)) }
-        return ConversationDetail(conv.getLong("id"), customer.optString("email"), site.optString("name"), customer.optBoolean("blocked"), messages)
+        return ConversationDetail(
+            conv.getLong("id"),
+            customer.optString("email"),
+            site.optString("name"),
+            customer.optBoolean("blocked"),
+            messages,
+            readState?.optLong("customer_last_seen_seq") ?: 0L,
+            readState?.optString("customer_last_seen_at")?.takeIf { it.isNotBlank() && it != "null" },
+            readState?.optLong("agent_last_seen_seq") ?: 0L,
+            readState?.optString("agent_last_seen_at")?.takeIf { it.isNotBlank() && it != "null" }
+        )
     }
 
     fun parseMessage(o: JSONObject): ChatMessage =

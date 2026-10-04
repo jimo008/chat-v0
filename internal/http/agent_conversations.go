@@ -21,9 +21,10 @@ func (s *Server) agentListCustomers(w http.ResponseWriter, r *http.Request) {
 		 LEFT JOIN messages lm ON lm.id = conv.last_message_id
 		 LEFT JOIN (
 		   SELECT conversation_id, COUNT(*) AS unread_count
-		   FROM messages
-		   WHERE sender_type = 'customer' AND agent_read_at IS NULL
-		   GROUP BY conversation_id
+		   FROM messages m
+		   JOIN conversations c2 ON c2.id = m.conversation_id
+		   WHERE m.sender_type = 'customer' AND m.seq > c2.agent_last_seen_seq
+		   GROUP BY m.conversation_id
 		 ) unread ON unread.conversation_id = conv.id
 		 LEFT JOIN (
 		   SELECT conversation_id, COUNT(*) AS ringing_count
@@ -238,6 +239,12 @@ func (s *Server) agentGetConversation(w http.ResponseWriter, r *http.Request) {
 	if afterSeq == 0 {
 		reverseMessages(messages)
 	}
+	readState, err := s.conversationReadState(r.Context(), s.db, conversationID)
+	if err != nil {
+		s.logger.Error("agent read state", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "read_state_failed"})
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"conversation": map[string]any{
@@ -254,6 +261,7 @@ func (s *Server) agentGetConversation(w http.ResponseWriter, r *http.Request) {
 				"blocked":        meta.Blocked,
 			},
 		},
-		"messages": messages,
+		"read_state": readState,
+		"messages":   messages,
 	})
 }

@@ -247,6 +247,7 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
     var status by remember { mutableStateOf("加载中") }
     var loadingOlder by remember { mutableStateOf(false) }
     var didInitialScroll by remember(customer.conversationId) { mutableStateOf(false) }
+    var seenCacheVersion by remember(customer.conversationId) { mutableStateOf(prefs.customerListVersion) }
     val listState = rememberLazyListState()
     BackHandler { onBack() }
 
@@ -260,20 +261,13 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
                 } else {
                     api.conversationJson(customer.conversationId)
                 }
-                val parsed = api.parseConversation(json)
-                if (afterSeq > 0L && parsed.messages.isEmpty()) {
-                    null
-                } else {
-                    parsed
-                }
+                api.parseConversation(json)
             } }
                 .onSuccess { latest ->
-                    if (latest != null) {
-                        val merged = if (localMessages.isEmpty()) latest.messages else mergeMessages(localMessages + latest.messages)
-                        detail = latest.copy(messages = merged)
-                        localMessages = merged
-                        prefs.setCachedConversation(customer.conversationId, conversationCacheJson(latest, merged))
-                    }
+                    val merged = if (localMessages.isEmpty()) latest.messages else mergeMessages(localMessages + latest.messages)
+                    detail = latest.copy(messages = merged)
+                    localMessages = merged
+                    prefs.setCachedConversation(customer.conversationId, conversationCacheJson(latest, merged))
                     status = ""
                     withContext(Dispatchers.IO) {
                         runCatching { AgentApi(prefs.baseUrl, prefs.token).markRead(customer.conversationId) }
@@ -313,6 +307,23 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
                 .onSuccess { detail = it; localMessages = it.messages; status = "" }
         }
         refresh()
+    }
+    LaunchedEffect(customer.conversationId) {
+        while (true) {
+            delay(1000)
+            val currentVersion = prefs.customerListVersion
+            if (currentVersion != seenCacheVersion) {
+                seenCacheVersion = currentVersion
+                val cached = prefs.cachedConversation(customer.conversationId)
+                if (cached.isNotBlank()) {
+                    runCatching { AgentApi(prefs.baseUrl, prefs.token).parseConversation(JSONObject(cached)) }
+                        .onSuccess { cachedDetail ->
+                            detail = cachedDetail
+                            localMessages = mergeMessages(localMessages + cachedDetail.messages)
+                        }
+                }
+            }
+        }
     }
     LaunchedEffect(listState) {
         snapshotFlow { listState.firstVisibleItemIndex }
@@ -377,7 +388,7 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
         if (status.isNotBlank()) Text(status)
         LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(localMessages, key = { it.localKey }) { m ->
-                MessageBubble(m, prefs, onRetry = { sendText(m.content, m.localKey) })
+                MessageBubble(m, prefs, customerLastSeenSeq = detail?.customerLastSeenSeq ?: 0L, onRetry = { sendText(m.content, m.localKey) })
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -406,7 +417,7 @@ fun lastPreview(customer: CustomerItem): String {
 }
 
 @Composable
-fun MessageBubble(message: ChatMessage, prefs: AgentPrefs, onRetry: () -> Unit) {
+fun MessageBubble(message: ChatMessage, prefs: AgentPrefs, customerLastSeenSeq: Long, onRetry: () -> Unit) {
     val isMine = message.senderType == "agent"
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start) {
         Column(horizontalAlignment = if (isMine) Alignment.End else Alignment.Start, modifier = Modifier.fillMaxWidth(0.82f)) {
@@ -423,7 +434,7 @@ fun MessageBubble(message: ChatMessage, prefs: AgentPrefs, onRetry: () -> Unit) 
                             val state = when {
                                 message.localStatus == "sending" -> "发送中..."
                                 message.localStatus == "failed" -> "发送失败"
-                                message.customerReadAt != null -> "已读"
+                                message.seq > 0 && message.seq <= customerLastSeenSeq -> "已读"
                                 else -> "已发送"
                             }
                             Text(state, style = MaterialTheme.typography.labelSmall, color = if (message.localStatus == "failed") Color(0xFFFFCDD2) else Color(0xFFE0E7FF))
@@ -505,6 +516,12 @@ fun conversationCacheJson(detail: ConversationDetail, messages: List<ChatMessage
         put("site", JSONObject().apply {
             put("name", detail.siteName)
         })
+    })
+    root.put("read_state", JSONObject().apply {
+        put("customer_last_seen_seq", detail.customerLastSeenSeq)
+        if (detail.customerLastSeenAt == null) put("customer_last_seen_at", JSONObject.NULL) else put("customer_last_seen_at", detail.customerLastSeenAt)
+        put("agent_last_seen_seq", detail.agentLastSeenSeq)
+        if (detail.agentLastSeenAt == null) put("agent_last_seen_at", JSONObject.NULL) else put("agent_last_seen_at", detail.agentLastSeenAt)
     })
     root.put("messages", org.json.JSONArray().apply {
         messages.forEach { m ->

@@ -31,5 +31,9 @@ data class ConversationDetail(
     val customerEmail: String,
     val siteName: String,
     val blocked: Boolean,
-    val messages: List<ChatMessage>
+    val messages: List<ChatMessage>,
+    val customerLastSeenSeq: Long = 0,
+    val customerLastSeenAt: String? = null,
+    val agentLastSeenSeq: Long = 0,
+    val agentLastSeenAt: String? = null
 )

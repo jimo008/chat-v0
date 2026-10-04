@@ -151,6 +151,15 @@ class AgentForegroundService : Service() {
                         notifyNormal(if (conversationId > 0) "#$conversationId $content" else content)
                     }
                 }
+                "CUSTOMER_READ_UPDATED", "MESSAGE_READ" -> {
+                    val payload = event.optJSONObject("payload") ?: event.optJSONObject("payload_json")
+                    val conversationId = payload?.optLong("conversation_id", 0L) ?: 0L
+                    val readState = payload?.optJSONObject("read_state")
+                    if (conversationId > 0L && readState != null) {
+                        prefs.updateCachedConversationReadState(conversationId, readState)
+                        prefs.bumpCustomerListVersion()
+                    }
+                }
                 "EMERGENCY_STARTED" -> {
                     val payload = event.optJSONObject("payload") ?: event.optJSONObject("payload_json")
                     prefs.bumpCustomerListVersion()

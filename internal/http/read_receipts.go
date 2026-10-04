@@ -62,11 +62,35 @@ func (s *Server) customerRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	affected, _ := result.RowsAffected()
-	if affected > 0 {
-		if _, _, err := createEvent(r.Context(), tx, customer.SiteID, "MESSAGE_READ", map[string]any{
+	cursorResult, err := tx.ExecContext(
+		r.Context(),
+		`UPDATE conversations
+		 SET customer_last_seen_seq = GREATEST(customer_last_seen_seq, ?),
+		     customer_last_seen_at = NOW(3),
+		     updated_at = NOW(3)
+		 WHERE id = ? AND customer_last_seen_seq < ?`,
+		req.UpToSeq,
+		customer.ConversationID,
+		req.UpToSeq,
+	)
+	if err != nil {
+		s.logger.Error("update customer read cursor", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "read_cursor_update_failed"})
+		return
+	}
+	cursorAffected, _ := cursorResult.RowsAffected()
+	if affected > 0 || cursorAffected > 0 {
+		state, err := s.conversationReadState(r.Context(), tx, customer.ConversationID)
+		if err != nil {
+			s.logger.Error("load customer read state", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "read_state_failed"})
+			return
+		}
+		if _, _, err := createEvent(r.Context(), tx, customer.SiteID, "CUSTOMER_READ_UPDATED", map[string]any{
 			"conversation_id": customer.ConversationID,
 			"customer_id":     customer.CustomerID,
 			"up_to_seq":       req.UpToSeq,
+			"read_state":      state,
 		}); err != nil {
 			s.logger.Error("customer read event", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "read_event_failed"})

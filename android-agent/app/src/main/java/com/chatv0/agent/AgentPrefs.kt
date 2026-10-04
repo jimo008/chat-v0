@@ -120,6 +120,16 @@ class AgentPrefs(context: Context) {
         }
     }
 
+    fun updateCachedConversationReadState(conversationId: Long, readState: JSONObject) {
+        val raw = cachedConversation(conversationId)
+        if (raw.isBlank()) return
+        runCatching {
+            val root = JSONObject(raw)
+            root.put("read_state", readState)
+            setCachedConversation(conversationId, root.toString())
+        }
+    }
+
     fun clearAuth() {
         prefs.edit().remove("token").remove("last_seq").remove("customers_json").apply()
     }

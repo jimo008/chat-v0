@@ -133,10 +133,17 @@ func (s *Server) customerConversation(w http.ResponseWriter, r *http.Request) {
 	if afterSeq == 0 {
 		reverseMessages(messages)
 	}
+	readState, err := s.conversationReadState(r.Context(), s.db, customer.ConversationID)
+	if err != nil {
+		s.logger.Error("customer read state", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "read_state_failed"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"conversation": map[string]any{
 			"id": customer.ConversationID,
 		},
-		"messages": messages,
+		"read_state": readState,
+		"messages":   messages,
 	})
 }

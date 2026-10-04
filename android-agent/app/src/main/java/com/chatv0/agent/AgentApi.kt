@@ -8,6 +8,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.OffsetDateTime
 import java.util.concurrent.TimeUnit
 
 class AgentApi(private val baseUrl: String, private val token: String = "") {
@@ -43,7 +44,7 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
                 o.optString("last_message"),
                 o.optString("last_message_at")
             )
-        }.sortedWith(compareByDescending<CustomerItem> { if (it.ringingCount > 0) 1 else 0 }.thenByDescending { it.lastMessageAt })
+        }.sortedWith(compareByDescending<CustomerItem> { if (it.ringingCount > 0) 1 else 0 }.thenByDescending { parseTimeMillis(it.lastMessageAt) })
     }
 
     fun conversation(id: Long): ConversationDetail {
@@ -154,6 +155,9 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
         else -> "图片上传失败: $status"
     }
 }
+
+private fun parseTimeMillis(value: String): Long =
+    runCatching { OffsetDateTime.parse(value).toInstant().toEpochMilli() }.getOrDefault(0L)
 
 private fun displayName(context: Context, uri: Uri): String {
     context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->

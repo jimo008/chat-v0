@@ -251,6 +251,15 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
     val listState = rememberLazyListState()
     BackHandler { onBack() }
 
+    fun scrollToLatest() {
+        scope.launch {
+            delay(80)
+            if (localMessages.isNotEmpty()) {
+                listState.animateScrollToItem(localMessages.lastIndex)
+            }
+        }
+    }
+
     fun refresh() {
         scope.launch {
             runCatching { withContext(Dispatchers.IO) {
@@ -340,7 +349,7 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
                 withContext(Dispatchers.IO) {
                     AgentApi(prefs.baseUrl, prefs.token).uploadImage(context, customer.conversationId, uri)
                 }
-            }.onSuccess { refresh() }
+            }.onSuccess { refresh(); scrollToLatest() }
                 .onFailure { status = it.message ?: "图片上传失败" }
         }
     }
@@ -352,6 +361,7 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
         } else {
             val pending = ChatMessage(-System.currentTimeMillis(), "agent", 0, "text", text, null, null, "", localKey, "sending", localKey)
             localMessages = localMessages + pending
+            scrollToLatest()
         }
         scope.launch {
             runCatching {
@@ -363,6 +373,7 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
                 prefs.setCachedConversation(customer.conversationId, conversationCacheJson(mergedDetail, localMessages))
                 prefs.updateCachedCustomerPreview(customer.conversationId, text, lastMessageAt = sent.createdAt)
                 prefs.bumpCustomerListVersion()
+                scrollToLatest()
             }
                 .onFailure {
                     localMessages = localMessages.map { if (it.localKey == localKey) it.copy(localStatus = "failed") else it }

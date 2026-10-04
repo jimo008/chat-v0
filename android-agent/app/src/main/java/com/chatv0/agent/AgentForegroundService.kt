@@ -162,11 +162,16 @@ class AgentForegroundService : Service() {
                 }
                 "EMERGENCY_STARTED" -> {
                     val payload = event.optJSONObject("payload") ?: event.optJSONObject("payload_json")
+                    val conversationId = payload?.optLong("conversation_id", 0L) ?: 0L
+                    if (conversationId > 0L) prefs.updateCachedCustomerPreview(conversationId, "", ringingDelta = 1)
                     prefs.bumpCustomerListVersion()
                     val email = payload?.optString("customer_email").orEmpty()
                     notifyEmergency(if (email.isBlank()) "有客户正在紧急呼叫" else "$email 正在紧急呼叫")
                 }
                 "EMERGENCY_ACCEPTED", "EMERGENCY_CANCELLED", "EMERGENCY_EXPIRED" -> {
+                    val payload = event.optJSONObject("payload") ?: event.optJSONObject("payload_json")
+                    val conversationId = payload?.optLong("conversation_id", 0L) ?: 0L
+                    if (conversationId > 0L) prefs.setCachedCustomerRinging(conversationId, 0)
                     prefs.bumpCustomerListVersion()
                     stopEmergencyRing()
                     (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(3)

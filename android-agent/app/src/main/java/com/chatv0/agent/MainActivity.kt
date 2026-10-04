@@ -152,9 +152,14 @@ fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (Custo
         while (true) {
             val currentVersion = prefs.customerListVersion
             if (currentVersion != seenListVersion || customers.isEmpty()) {
+                val latestCached = prefs.cachedCustomers()
+                if (latestCached.isNotBlank()) {
+                    runCatching { AgentApi(prefs.baseUrl, prefs.token).parseCustomers(JSONObject(latestCached)) }
+                        .onSuccess { customers = it; status = "共 ${it.size} 个客户"; seenListVersion = currentVersion }
+                }
                 refresh()
             }
-            delay(3000)
+            delay(1000)
         }
     }
     LaunchedEffect(Unit) {

@@ -103,6 +103,23 @@ class AgentPrefs(context: Context) {
         }
     }
 
+    fun setCachedCustomerRinging(conversationId: Long, ringingCount: Int) {
+        val raw = cachedCustomers()
+        if (raw.isBlank()) return
+        runCatching {
+            val root = JSONObject(raw)
+            val arr = root.optJSONArray("customers") ?: return
+            for (i in 0 until arr.length()) {
+                val item = arr.getJSONObject(i)
+                if (item.optLong("conversation_id") == conversationId) {
+                    item.put("ringing_count", ringingCount.coerceAtLeast(0))
+                    break
+                }
+            }
+            setCachedCustomers(root.toString())
+        }
+    }
+
     fun markCachedCustomerRead(conversationId: Long) {
         val raw = cachedCustomers()
         if (raw.isBlank()) return

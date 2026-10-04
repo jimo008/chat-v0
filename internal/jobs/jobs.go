@@ -268,7 +268,7 @@ func (r *Runner) ExpireEmergencyCalls(ctx context.Context) (uint64, error) {
 
 	rows, err := tx.QueryContext(
 		ctx,
-		`SELECT id, site_id FROM emergency_calls
+		`SELECT id, site_id, conversation_id FROM emergency_calls
 		 WHERE status = 'RINGING'
 		   AND created_at < DATE_SUB(NOW(3), INTERVAL ? SECOND)
 		 FOR UPDATE`,
@@ -280,13 +280,14 @@ func (r *Runner) ExpireEmergencyCalls(ctx context.Context) (uint64, error) {
 	defer rows.Close()
 
 	type call struct {
-		ID     uint64
-		SiteID uint64
+		ID             uint64
+		SiteID         uint64
+		ConversationID uint64
 	}
 	calls := make([]call, 0)
 	for rows.Next() {
 		var c call
-		if err := rows.Scan(&c.ID, &c.SiteID); err != nil {
+		if err := rows.Scan(&c.ID, &c.SiteID, &c.ConversationID); err != nil {
 			return 0, err
 		}
 		calls = append(calls, c)
@@ -298,7 +299,7 @@ func (r *Runner) ExpireEmergencyCalls(ctx context.Context) (uint64, error) {
 		if _, err := tx.ExecContext(ctx, `UPDATE emergency_calls SET status = 'EXPIRED', expired_at = NOW(3) WHERE id = ? AND status = 'RINGING'`, c.ID); err != nil {
 			return 0, err
 		}
-		if err := createWorkerEvent(ctx, tx, c.SiteID, "EMERGENCY_EXPIRED", map[string]any{"call_id": c.ID}); err != nil {
+		if err := createWorkerEvent(ctx, tx, c.SiteID, "EMERGENCY_EXPIRED", map[string]any{"call_id": c.ID, "conversation_id": c.ConversationID}); err != nil {
 			return 0, err
 		}
 	}

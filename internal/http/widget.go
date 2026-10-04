@@ -271,8 +271,13 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var readTimer = null;
 
   function addSystem(text, kind){
+    clearOnlySystem();
     var cls = "system" + (kind ? " " + kind : "");
-    messagesEl.innerHTML = '<div class="' + cls + '">' + escapeHTML(text) + '</div>';
+    var div = document.createElement("div");
+    div.className = cls;
+    div.textContent = text;
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
   }
   function clearOnlySystem(){
     if (messagesEl.children.length === 1 && messagesEl.children[0].classList.contains("system")) messagesEl.innerHTML = "";

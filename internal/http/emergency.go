@@ -155,7 +155,8 @@ func (s *Server) customerEmergencyCancel(w http.ResponseWriter, r *http.Request)
 	affected, _ := result.RowsAffected()
 	if affected > 0 {
 		if _, _, err := createEvent(r.Context(), tx, customer.SiteID, "EMERGENCY_CANCELLED", map[string]any{
-			"customer_id": customer.CustomerID,
+			"customer_id":     customer.CustomerID,
+			"conversation_id": customer.ConversationID,
 		}); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "cancel_event_failed"})
 			return
@@ -260,7 +261,8 @@ func (s *Server) acceptEmergencyCall(ctx context.Context, callID, agentID, devic
 	}
 	defer tx.Rollback()
 	var siteID uint64
-	err = tx.QueryRowContext(ctx, `SELECT site_id FROM emergency_calls WHERE id = ? AND status = 'RINGING' FOR UPDATE`, callID).Scan(&siteID)
+	var conversationID uint64
+	err = tx.QueryRowContext(ctx, `SELECT site_id, conversation_id FROM emergency_calls WHERE id = ? AND status = 'RINGING' FOR UPDATE`, callID).Scan(&siteID, &conversationID)
 	if err != nil {
 		return err
 	}
@@ -281,9 +283,10 @@ func (s *Server) acceptEmergencyCall(ctx context.Context, callID, agentID, devic
 		return sql.ErrNoRows
 	}
 	if _, _, err := createEvent(ctx, tx, siteID, "EMERGENCY_ACCEPTED", map[string]any{
-		"call_id":   callID,
-		"agent_id":  agentID,
-		"device_id": deviceID,
+		"call_id":         callID,
+		"agent_id":        agentID,
+		"device_id":       deviceID,
+		"conversation_id": conversationID,
 	}); err != nil {
 		return err
 	}
@@ -364,19 +367,20 @@ func (s *Server) acceptAllRinging(ctx context.Context, agentID, deviceID uint64)
 		return 0, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT id, site_id FROM emergency_calls WHERE status = 'RINGING' FOR UPDATE`)
+	rows, err := tx.QueryContext(ctx, `SELECT id, site_id, conversation_id FROM emergency_calls WHERE status = 'RINGING' FOR UPDATE`)
 	if err != nil {
 		return 0, err
 	}
 	defer rows.Close()
 	type call struct {
-		ID     uint64
-		SiteID uint64
+		ID             uint64
+		SiteID         uint64
+		ConversationID uint64
 	}
 	calls := make([]call, 0)
 	for rows.Next() {
 		var c call
-		if err := rows.Scan(&c.ID, &c.SiteID); err != nil {
+		if err := rows.Scan(&c.ID, &c.SiteID, &c.ConversationID); err != nil {
 			return 0, err
 		}
 		calls = append(calls, c)
@@ -397,9 +401,10 @@ func (s *Server) acceptAllRinging(ctx context.Context, agentID, deviceID uint64)
 			return 0, err
 		}
 		if _, _, err := createEvent(ctx, tx, c.SiteID, "EMERGENCY_ACCEPTED", map[string]any{
-			"call_id":   c.ID,
-			"agent_id":  agentID,
-			"device_id": deviceID,
+			"call_id":         c.ID,
+			"agent_id":        agentID,
+			"device_id":       deviceID,
+			"conversation_id": c.ConversationID,
 		}); err != nil {
 			return 0, err
 		}
@@ -418,7 +423,7 @@ func (s *Server) expireEmergencyCalls(ctx context.Context) (uint64, error) {
 	defer tx.Rollback()
 	rows, err := tx.QueryContext(
 		ctx,
-		`SELECT id, site_id FROM emergency_calls
+		`SELECT id, site_id, conversation_id FROM emergency_calls
 		 WHERE status = 'RINGING'
 		   AND created_at < DATE_SUB(NOW(3), INTERVAL ? SECOND)
 		 FOR UPDATE`,
@@ -429,13 +434,14 @@ func (s *Server) expireEmergencyCalls(ctx context.Context) (uint64, error) {
 	}
 	defer rows.Close()
 	type call struct {
-		ID     uint64
-		SiteID uint64
+		ID             uint64
+		SiteID         uint64
+		ConversationID uint64
 	}
 	calls := make([]call, 0)
 	for rows.Next() {
 		var c call
-		if err := rows.Scan(&c.ID, &c.SiteID); err != nil {
+		if err := rows.Scan(&c.ID, &c.SiteID, &c.ConversationID); err != nil {
 			return 0, err
 		}
 		calls = append(calls, c)
@@ -447,7 +453,7 @@ func (s *Server) expireEmergencyCalls(ctx context.Context) (uint64, error) {
 		if _, err := tx.ExecContext(ctx, `UPDATE emergency_calls SET status = 'EXPIRED', expired_at = NOW(3) WHERE id = ? AND status = 'RINGING'`, c.ID); err != nil {
 			return 0, err
 		}
-		if _, _, err := createEvent(ctx, tx, c.SiteID, "EMERGENCY_EXPIRED", map[string]any{"call_id": c.ID}); err != nil {
+		if _, _, err := createEvent(ctx, tx, c.SiteID, "EMERGENCY_EXPIRED", map[string]any{"call_id": c.ID, "conversation_id": c.ConversationID}); err != nil {
 			return 0, err
 		}
 	}

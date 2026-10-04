@@ -111,7 +111,7 @@ class AgentForegroundService : Service() {
 
     private suspend fun syncLoop() {
         while (scope.isActive) {
-            delay(3000)
+            delay(1000)
             val token = prefs.token
             val baseUrl = prefs.baseUrl
             if (token.isBlank() || baseUrl.isBlank()) continue

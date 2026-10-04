@@ -522,7 +522,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   messagesEl.addEventListener("scroll", function(){ if (opened && allowOlderLoad && messagesEl.scrollTop < 32) loadOlder(); if (opened && isNearBottom()) scheduleRead(); });
   document.addEventListener("visibilitychange", scheduleRead);
   window.addEventListener("focus", scheduleRead);
-  setInterval(function(){ if(token) loadConversation(true); }, 3000);
+  setInterval(function(){ if(token) loadConversation(true); }, 1000);
   sendBtn.onclick = function(){
     var content = textEl.value.trim();
     if (!content) return;
@@ -601,7 +601,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
       emergencyTextEl.textContent = "☎ 正在呼叫客服 " + emergencySeconds + " 秒";
     }, 1000);
     if (emergencyStatusTimer) clearInterval(emergencyStatusTimer);
-    emergencyStatusTimer = setInterval(checkEmergencyStatus, 3000);
+    emergencyStatusTimer = setInterval(checkEmergencyStatus, 1000);
   }
   function stopEmergencyCalling(){
     emergencyActive = false;

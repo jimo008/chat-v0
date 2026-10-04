@@ -23,7 +23,7 @@ func (s *Server) customerRead(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
 		return
 	}
-	if req.UpToSeq == 0 || !req.Visible || !req.Open || req.OpenedSinceMS < 2000 {
+	if req.UpToSeq == 0 || !req.Visible || !req.Open || req.OpenedSinceMS < 1000 {
 		s.logger.Info(
 			"customer read ignored",
 			"conversation_id", customer.ConversationID,

@@ -426,7 +426,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     setTimeout(scrollToBottom, 260);
   }
   function canMarkRead(){
-    return token && lastReadSeq && opened && document.visibilityState === "visible" && panelVisibleSince > 0 && isNearBottom() && Date.now() - Math.max(panelVisibleSince, lastAgentArrivedAt) >= 2000;
+    return token && lastReadSeq && opened && document.visibilityState === "visible" && panelVisibleSince > 0 && isNearBottom() && Date.now() - Math.max(panelVisibleSince, lastAgentArrivedAt) >= 1000;
   }
   function isNearBottom(){
     return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 80;
@@ -434,7 +434,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   function scheduleRead(){
     if (readTimer) clearTimeout(readTimer);
     if (!token || !opened || !lastReadSeq) return;
-    readTimer = setTimeout(sendRead, 2200);
+    readTimer = setTimeout(sendRead, 1000);
   }
   function setOpen(next){
     opened = next;

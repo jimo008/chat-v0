@@ -468,7 +468,11 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   launcherEl.onclick = function(){ setOpen(true); };
   minimizeBtn.onclick = function(){ setOpen(false); };
   function showAuthed(){ authEl.classList.add("hidden"); composerEl.classList.toggle("hidden", emergencyActive); }
-  function showAuth(){ authEl.classList.add("hidden"); composerEl.classList.add("hidden"); ensureGuestSession().then(function(){ loadConversation(); }).catch(function(){ addSystem("连接客服失败"); }); }
+  function showAuth(){
+    authEl.classList.add("hidden");
+    composerEl.classList.toggle("hidden", emergencyActive);
+    if (!token && messagesEl.children.length === 1 && messagesEl.children[0].classList.contains("system")) addSystem("可以开始聊天了");
+  }
   function loadConversation(incremental){
     if (!token) { showAuth(); return; }
     var url = api + "/api/v1/customer/conversation";
@@ -534,7 +538,9 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     var originalAppendMessage = appendMessage;
     appendMessage(pending);
     pendingEl = messagesEl.lastElementChild;
-    fetch(api + "/api/v1/customer/messages", {method:"POST", headers:authHeaders(), body:JSON.stringify({type:"text",content:content,client_msg_id:localKey})})
+    ensureGuestSession().then(function(){
+      return fetch(api + "/api/v1/customer/messages", {method:"POST", headers:authHeaders(), body:JSON.stringify({type:"text",content:content,client_msg_id:localKey})});
+    })
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
       .then(function(data){
         if (pendingEl) {
@@ -568,7 +574,9 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     var form = new FormData();
     form.append("file", file);
     setLoading(imageBtn, true, "上传中");
-    fetch(api + "/api/v1/customer/images", {method:"POST", headers: token ? {"Authorization":"Bearer " + token} : {}, body: form})
+    ensureGuestSession().then(function(){
+      return fetch(api + "/api/v1/customer/images", {method:"POST", headers: token ? {"Authorization":"Bearer " + token} : {}, body: form});
+    })
       .then(function(r){
         return r.text().then(function(text){
           var data = {};
@@ -583,7 +591,9 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   };
   emergencyBtn.onclick = function(){
     setLoading(emergencyBtn, true, "呼叫中");
-    fetch(api + "/api/v1/customer/emergency/start", {method:"POST", headers:authHeaders()})
+    ensureGuestSession().then(function(){
+      return fetch(api + "/api/v1/customer/emergency/start", {method:"POST", headers:authHeaders()});
+    })
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
       .then(function(){ startEmergencyCalling(); })
       .catch(function(){ addSystem("当前暂无客服值班，您可以先发送消息。"); })
@@ -637,7 +647,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     fetch(api + "/api/v1/customer/xboard-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,xboard_user_id:String(id.xboard_user_id || id.id || id.user_id || id.uuid || ""),email:id.email || "",plan:id.plan || id.subscription || "",expire_time:id.expire_time || id.expired_at || null,used_traffic:id.used_traffic || null,all_traffic:id.all_traffic || null,raw_profile:id.raw_profile || id,last_support_entry_type:"web",last_support_entry_url:entryURL})})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
       .then(function(data){ console.info("[chat-v0] xboard login success", data.customer); token = data.token; localStorage.setItem(tokenKey, token); showAuthed(); loadConversation(); })
-      .catch(function(err){ console.info("[chat-v0] xboard login failed", err); if(!token) showAuth(); });
+      .catch(function(err){ console.info("[chat-v0] xboard login failed", err); if(!token) { showAuthed(); addSystem("可以开始聊天了"); } });
   });
   setOpen(false);
   loadConversation();

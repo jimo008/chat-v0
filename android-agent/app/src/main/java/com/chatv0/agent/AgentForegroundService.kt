@@ -218,7 +218,7 @@ class AgentForegroundService : Service() {
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        return NotificationCompat.Builder(this, channelId)
+        val builder = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(android.R.drawable.sym_call_incoming)
             .setContentTitle(if (emergency) "紧急客服呼叫" else "Chat V0 客服")
             .setContentText(text)
@@ -230,22 +230,27 @@ class AgentForegroundService : Service() {
             .setVibrate(if (emergency) longArrayOf(0, 700, 300, 700, 300, 700) else longArrayOf(0, 200, 100, 200))
             .setDefaults(Notification.DEFAULT_ALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .build()
+        if (emergency || alert) builder.setTimeoutAfter(if (emergency) 60000 else 15000)
+        return builder.build()
     }
 
     private fun createChannel() {
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        manager.createNotificationChannel(NotificationChannel("agent", "客服服务", NotificationManager.IMPORTANCE_HIGH))
-        manager.createNotificationChannel(NotificationChannel("agent-popup-v2", "客户新消息弹窗", NotificationManager.IMPORTANCE_HIGH).apply {
+        manager.createNotificationChannel(NotificationChannel("agent", "客服服务", NotificationManager.IMPORTANCE_LOW).apply {
+            description = "保持客服后台连接"
+            setShowBadge(false)
+        })
+        manager.createNotificationChannel(NotificationChannel("agent-popup-v2", "客户新消息弹窗", NotificationManager.IMPORTANCE_MAX).apply {
             description = "客户发送新消息时弹窗和亮屏提醒"
             enableVibration(true)
             vibrationPattern = longArrayOf(0, 300, 120, 300)
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         })
-        val emergencyChannel = NotificationChannel("emergency", "紧急呼叫", NotificationManager.IMPORTANCE_HIGH).apply {
+        val emergencyChannel = NotificationChannel("emergency", "紧急呼叫", NotificationManager.IMPORTANCE_MAX).apply {
             description = "紧急客服呼叫提醒"
             enableVibration(true)
             vibrationPattern = longArrayOf(0, 700, 300, 700, 300, 700)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         }
         manager.createNotificationChannel(emergencyChannel)
     }

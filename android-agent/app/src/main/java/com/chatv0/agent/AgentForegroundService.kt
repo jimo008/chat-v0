@@ -6,6 +6,7 @@ import android.media.Ringtone
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import okhttp3.*
@@ -25,11 +26,13 @@ class AgentForegroundService : Service() {
     private var normalRingtone: Ringtone? = null
     private var syncJob: Job? = null
     private var reconnectJob: Job? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
         prefs = AgentPrefs(this)
         createChannel()
+        acquireWakeLock()
         startForeground(1, notification(text = "客服服务正在运行", ongoing = true, alert = false))
     }
 
@@ -53,6 +56,7 @@ class AgentForegroundService : Service() {
     override fun onDestroy() {
         webSocket?.close(1000, "service_destroy")
         stopEmergencyRing()
+        releaseWakeLock()
         scope.cancel()
         super.onDestroy()
     }
@@ -89,6 +93,20 @@ class AgentForegroundService : Service() {
                 scheduleReconnect()
             }
         })
+    }
+
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "chatv0:agent-sync").apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
     }
 
     private fun bootstrapLastSeq() {

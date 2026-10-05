@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strconv"
 )
 
 func (s *Server) ensureEmailBatch(ctx context.Context, tx *sql.Tx, siteID, conversationID, messageID uint64) error {
@@ -40,11 +41,15 @@ func (s *Server) ensureEmailBatch(ctx context.Context, tx *sql.Tx, siteID, conve
 		conversationID,
 	).Scan(&batchID)
 	if errors.Is(err, sql.ErrNoRows) {
+		delaySeconds := s.cfg.EmailUnreadDelaySeconds
+		if delaySeconds < 1 {
+			delaySeconds = 300
+		}
 		result, err := tx.ExecContext(
 			ctx,
 			`INSERT INTO email_batches
 			   (site_id, customer_id, conversation_id, send_after, return_entry_type, return_url)
-			 VALUES (?, ?, ?, DATE_ADD(NOW(3), INTERVAL 300 SECOND), ?, ?)`,
+			 VALUES (?, ?, ?, DATE_ADD(NOW(3), INTERVAL `+strconv.Itoa(delaySeconds)+` SECOND), ?, ?)`,
 			siteID,
 			customerID,
 			conversationID,

@@ -103,7 +103,7 @@ fun LoginScreen(prefs: AgentPrefs, onLoggedIn: (String) -> Unit) {
                 runCatching {
                     withContext(Dispatchers.IO) {
                         val cleanBase = baseUrl.trimEnd('/')
-                        val token = AgentApi(cleanBase).login(login, password, deviceId(context))
+                        val token = AgentApi(cleanBase).login(login, password, prefs.deviceId)
                         prefs.baseUrl = cleanBase
                         prefs.login = login
                         prefs.lastSeq = 0L
@@ -583,5 +583,3 @@ fun mergeMessages(messages: List<ChatMessage>): List<ChatMessage> {
     }
     return result
 }
-
-fun deviceId(context: android.content.Context): String = "android-" + Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)

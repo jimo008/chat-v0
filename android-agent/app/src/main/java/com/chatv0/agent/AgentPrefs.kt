@@ -3,6 +3,7 @@ package com.chatv0.agent
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
 
 class AgentPrefs(context: Context) {
     private val prefs = context.getSharedPreferences("agent", Context.MODE_PRIVATE)
@@ -30,6 +31,15 @@ class AgentPrefs(context: Context) {
     var customerListVersion: Long
         get() = prefs.getLong("customer_list_version", 0L)
         set(value) = prefs.edit().putLong("customer_list_version", value).apply()
+
+    val deviceId: String
+        get() {
+            val existing = prefs.getString("device_id", "") ?: ""
+            if (existing.isNotBlank()) return existing
+            val generated = "android-" + UUID.randomUUID().toString()
+            prefs.edit().putString("device_id", generated).apply()
+            return generated
+        }
 
     fun bumpCustomerListVersion() {
         prefs.edit().putLong("customer_list_version", customerListVersion + 1).apply()

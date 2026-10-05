@@ -129,8 +129,39 @@ fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (Custo
     val scope = rememberCoroutineScope()
     var customers by remember { mutableStateOf<List<CustomerItem>>(emptyList()) }
     var status by remember { mutableStateOf("加载中") }
+    var deviceStatus by remember { mutableStateOf("设备状态检查中") }
     var duty by remember { mutableStateOf(prefs.acceptEmergency) }
     var seenListVersion by remember { mutableStateOf(prefs.customerListVersion) }
+
+    fun refreshDevices() {
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { AgentApi(prefs.baseUrl, prefs.token).devicesJson() }
+            }.onSuccess { root ->
+                val arr = root.optJSONArray("devices")
+                if (arr == null || arr.length() == 0) {
+                    deviceStatus = "设备：无在线记录"
+                    return@onSuccess
+                }
+                var active = 0
+                var current = ""
+                val now = System.currentTimeMillis()
+                for (i in 0 until arr.length()) {
+                    val item = arr.getJSONObject(i)
+                    val lastSync = item.optString("last_sync_at")
+                    val age = syncAgeSeconds(lastSync, now)
+                    if (age in 0..10 || item.optBoolean("ws_connected")) active++
+                    if (item.optBoolean("is_current")) {
+                        current = "本机 ${item.optString("device_id").takeLast(12)} ${if (age >= 0) "${age}秒前" else "未同步"}"
+                    }
+                }
+                deviceStatus = "设备：${active}/${arr.length()} 活跃" + if (current.isBlank()) "" else " · $current"
+            }.onFailure {
+                if (AgentApi(prefs.baseUrl, prefs.token).isUnauthorized(it)) onAuthExpired()
+                deviceStatus = "设备状态获取失败"
+            }
+        }
+    }
 
     fun refresh() {
         scope.launch {
@@ -170,6 +201,7 @@ fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (Custo
                         .onSuccess { customers = it; status = "共 ${it.size} 个客户"; seenListVersion = currentVersion }
                 }
                 refresh()
+                refreshDevices()
             }
             delay(1000)
         }
@@ -178,6 +210,7 @@ fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (Custo
         while (true) {
             delay(60000)
             refresh()
+            refreshDevices()
         }
     }
 
@@ -196,6 +229,7 @@ fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (Custo
         }
         PermissionButtons()
         Text(status, style = MaterialTheme.typography.bodySmall)
+        Text(deviceStatus, style = MaterialTheme.typography.bodySmall, color = Color(0xFF475569))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(customers) { c ->
                 Card(Modifier.fillMaxWidth().clickable { onSelect(c) }) {
@@ -572,6 +606,13 @@ fun conversationCacheJson(detail: ConversationDetail, messages: List<ChatMessage
 fun formatTime(value: String): String {
     if (value.isBlank()) return "刚刚"
     return runCatching { OffsetDateTime.parse(value).format(DateTimeFormatter.ofPattern("HH:mm")) }.getOrDefault(value.take(16))
+}
+
+fun syncAgeSeconds(value: String, nowMillis: Long = System.currentTimeMillis()): Long {
+    if (value.isBlank() || value == "null") return -1
+    return runCatching {
+        ((nowMillis - OffsetDateTime.parse(value).toInstant().toEpochMilli()) / 1000).coerceAtLeast(0)
+    }.getOrDefault(-1)
 }
 
 fun mergeMessages(messages: List<ChatMessage>): List<ChatMessage> {

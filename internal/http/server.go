@@ -51,6 +51,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /api/v1/customer/emergency/cancel", s.requireCustomer(http.HandlerFunc(s.customerEmergencyCancel)))
 	mux.HandleFunc("POST /api/v1/agent/login", s.agentLogin)
 	mux.Handle("GET /api/v1/agent/me", s.requireAgent(http.HandlerFunc(s.agentMe)))
+	mux.Handle("GET /api/v1/agent/devices", s.requireAgent(http.HandlerFunc(s.agentDevices)))
 	mux.Handle("GET /api/v1/agent/sync", s.requireAgent(http.HandlerFunc(s.agentSync)))
 	mux.Handle("POST /api/v1/agent/devices/foreground", s.requireAgent(http.HandlerFunc(s.agentDeviceForeground)))
 	mux.Handle("POST /api/v1/agent/devices/emergency-duty", s.requireAgent(http.HandlerFunc(s.agentEmergencyDuty)))

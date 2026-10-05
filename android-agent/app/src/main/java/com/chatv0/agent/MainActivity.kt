@@ -7,7 +7,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -266,7 +265,7 @@ fun PermissionButtons() {
         }, modifier = Modifier.fillMaxWidth()) { Text("允许通知") }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             OutlinedButton(onClick = { openAppSettings(context) }, modifier = Modifier.weight(1f)) { Text("权限设置") }
-            OutlinedButton(onClick = { openBatterySettings(context) }, modifier = Modifier.weight(1f)) { Text("后台保活") }
+            OutlinedButton(onClick = { openFullScreenSettings(context) }, modifier = Modifier.weight(1f)) { Text("全屏弹窗") }
         }
     }
 }
@@ -287,19 +286,6 @@ fun openFullScreenSettings(context: android.content.Context) {
         return
     }
     openAppSettings(context)
-}
-
-fun openBatterySettings(context: android.content.Context) {
-    val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
-    if (!powerManager.isIgnoringBatteryOptimizations(context.packageName)) {
-        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-            .setData(Uri.parse("package:${context.packageName}"))
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        runCatching { context.startActivity(intent) }.onSuccess { return }
-    }
-    val fallback = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    runCatching { context.startActivity(fallback) }.onFailure { openAppSettings(context) }
 }
 
 @Composable

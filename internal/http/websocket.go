@@ -86,13 +86,13 @@ func (s *Server) agentByToken(ctx context.Context, token string) (authenticatedA
 	var agent authenticatedAgent
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT a.id, d.id, a.username, a.email
+		`SELECT a.id, d.id, d.device_id, a.username, a.email
 		 FROM agent_devices d
 		 JOIN agents a ON a.id = d.agent_id
 		 WHERE d.token_hash = ?
 		 LIMIT 1`,
 		security.TokenHash(token),
-	).Scan(&agent.AgentID, &agent.DeviceID, &agent.Username, &agent.Email)
+	).Scan(&agent.AgentID, &agent.DeviceID, &agent.DeviceKey, &agent.Username, &agent.Email)
 	return agent, err
 }
 

@@ -29,6 +29,10 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
 
     fun customersJson(): JSONObject = getJson("/api/v1/agent/customers")
 
+    fun me(): JSONObject = getJson("/api/v1/agent/me")
+
+    fun isUnauthorized(error: Throwable): Boolean = error.message?.contains("401") == true
+
     fun parseCustomers(root: JSONObject): List<CustomerItem> {
         val arr = root.optJSONArray("customers") ?: JSONArray()
         return (0 until arr.length()).map { i ->

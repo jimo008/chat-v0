@@ -15,10 +15,11 @@ const agentContextKey contextKey = "agent"
 const customerContextKey contextKey = "customer"
 
 type authenticatedAgent struct {
-	AgentID  uint64
-	DeviceID uint64
-	Username string
-	Email    string
+	AgentID   uint64
+	DeviceID  uint64
+	DeviceKey string
+	Username  string
+	Email     string
 }
 
 type authenticatedCustomer struct {
@@ -43,13 +44,13 @@ func (s *Server) requireAgent(next http.Handler) http.Handler {
 		var agent authenticatedAgent
 		err := s.db.QueryRowContext(
 			r.Context(),
-			`SELECT a.id, d.id, a.username, a.email
+			`SELECT a.id, d.id, d.device_id, a.username, a.email
 			 FROM agent_devices d
 			 JOIN agents a ON a.id = d.agent_id
 			 WHERE d.token_hash = ?
 			 LIMIT 1`,
 			security.TokenHash(token),
-		).Scan(&agent.AgentID, &agent.DeviceID, &agent.Username, &agent.Email)
+		).Scan(&agent.AgentID, &agent.DeviceID, &agent.DeviceKey, &agent.Username, &agent.Email)
 		if err == sql.ErrNoRows {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_agent_token"})
 			return

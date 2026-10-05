@@ -102,6 +102,10 @@ class AgentForegroundService : Service() {
             .build()
         runCatching {
             client.newCall(req).execute().use { resp ->
+                if (resp.code == 401) {
+                    prefs.clearAuth()
+                    return
+                }
                 if (!resp.isSuccessful) return
                 val json = JSONObject(resp.body?.string().orEmpty())
                 if (json.has("latest_seq")) prefs.lastSeq = maxOf(prefs.lastSeq, json.optLong("latest_seq", 0L))
@@ -119,7 +123,15 @@ class AgentForegroundService : Service() {
                 .url(baseUrl + "/api/v1/agent/sync?after_seq=" + prefs.lastSeq)
                 .header("Authorization", "Bearer " + token)
                 .build()
-            runCatching { client.newCall(req).execute().use { resp -> if (resp.isSuccessful) handleEventEnvelope(resp.body?.string().orEmpty()) } }
+            runCatching {
+                client.newCall(req).execute().use { resp ->
+                    if (resp.code == 401) {
+                        prefs.clearAuth()
+                        return@use
+                    }
+                    if (resp.isSuccessful) handleEventEnvelope(resp.body?.string().orEmpty())
+                }
+            }
         }
     }
 

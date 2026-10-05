@@ -76,7 +76,7 @@ fun AgentApp(prefs: AgentPrefs, onStartService: () -> Unit) {
         if (token.isBlank()) {
             LoginScreen(prefs) { newToken -> token = newToken; onStartService() }
         } else if (selected == null) {
-            CustomerListScreen(prefs, onLogout = { prefs.clearAuth(); token = "" }, onSelect = { selected = it }, onStartService = onStartService)
+            CustomerListScreen(prefs, onLogout = { prefs.clearAuth(); token = "" }, onSelect = { selected = it }, onStartService = onStartService, onAuthExpired = { prefs.clearAuth(); token = "" })
         } else {
             ConversationScreen(prefs, selected!!, onBack = { selected = null })
         }
@@ -90,13 +90,13 @@ fun LoginScreen(prefs: AgentPrefs, onLoggedIn: (String) -> Unit) {
     var login by remember { mutableStateOf(prefs.login) }
     var password by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("未登录") }
-    val context = LocalContext.current
 
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Chat V0 客服端", style = MaterialTheme.typography.headlineSmall)
         OutlinedTextField(baseUrl, { baseUrl = it }, label = { Text("服务器地址") }, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(login, { login = it }, label = { Text("用户名或邮箱") }, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(password, { password = it }, label = { Text("密码") }, modifier = Modifier.fillMaxWidth())
+        Text("本机设备：${prefs.deviceId.takeLast(12)}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF64748B))
         Button(onClick = {
             scope.launch {
                 status = "登录中..."
@@ -104,13 +104,17 @@ fun LoginScreen(prefs: AgentPrefs, onLoggedIn: (String) -> Unit) {
                     withContext(Dispatchers.IO) {
                         val cleanBase = baseUrl.trimEnd('/')
                         val token = AgentApi(cleanBase).login(login, password, prefs.deviceId)
+                        val me = AgentApi(cleanBase, token).me()
                         prefs.baseUrl = cleanBase
                         prefs.login = login
                         prefs.lastSeq = 0L
                         prefs.token = token
-                        token
+                        token to (me.optJSONObject("device")?.optString("device_id").orEmpty())
                     }
-                }.onSuccess { status = "登录成功"; onLoggedIn(it) }
+                }.onSuccess { (newToken, serverDevice) ->
+                    status = if (serverDevice.isBlank()) "登录成功" else "登录成功，设备 ${serverDevice.takeLast(12)}"
+                    onLoggedIn(newToken)
+                }
                     .onFailure { status = it.message ?: "登录失败" }
             }
         }, modifier = Modifier.fillMaxWidth()) { Text("登录并启动客服服务") }
@@ -121,7 +125,7 @@ fun LoginScreen(prefs: AgentPrefs, onLoggedIn: (String) -> Unit) {
 }
 
 @Composable
-fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (CustomerItem) -> Unit, onStartService: () -> Unit) {
+fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (CustomerItem) -> Unit, onStartService: () -> Unit, onAuthExpired: () -> Unit) {
     val scope = rememberCoroutineScope()
     var customers by remember { mutableStateOf<List<CustomerItem>>(emptyList()) }
     var status by remember { mutableStateOf("加载中") }
@@ -144,6 +148,14 @@ fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (Custo
     }
     LaunchedEffect(Unit) {
         onStartService()
+        val authOk = withContext(Dispatchers.IO) {
+            runCatching { AgentApi(prefs.baseUrl, prefs.token).me() }.isSuccess
+        }
+        if (!authOk) {
+            status = "登录已失效，请重新登录"
+            onAuthExpired()
+            return@LaunchedEffect
+        }
         val cached = prefs.cachedCustomers()
         if (cached.isNotBlank()) {
             runCatching { AgentApi(prefs.baseUrl, prefs.token).parseCustomers(JSONObject(cached)) }

@@ -18,7 +18,8 @@ func (s *Server) agentMe(w http.ResponseWriter, r *http.Request) {
 			"email":    agent.Email,
 		},
 		"device": map[string]any{
-			"id": agent.DeviceID,
+			"id":        agent.DeviceID,
+			"device_id": agent.DeviceKey,
 		},
 	})
 }

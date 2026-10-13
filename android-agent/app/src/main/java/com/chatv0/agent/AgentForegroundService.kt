@@ -16,6 +16,26 @@ import java.util.concurrent.TimeUnit
 class AgentForegroundService : Service() {
     companion object {
         const val ACTION_STOP_RING = "com.chatv0.agent.STOP_RING"
+        private const val WATCHDOG_REQUEST_CODE = 2001
+        private const val WATCHDOG_INTERVAL_MS = 60_000L
+        private const val NORMAL_CHANNEL_ID = "agent-popup-v3"
+        private const val EMERGENCY_CHANNEL_ID = "emergency-v2"
+
+        fun scheduleWatchdog(context: android.content.Context) {
+            val intent = Intent(context, ServiceWatchdogReceiver::class.java)
+            val pendingIntent = PendingIntent.getBroadcast(
+                context,
+                WATCHDOG_REQUEST_CODE,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val alarmManager = context.getSystemService(ALARM_SERVICE) as AlarmManager
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                System.currentTimeMillis() + WATCHDOG_INTERVAL_MS,
+                pendingIntent
+            )
+        }
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -33,6 +53,7 @@ class AgentForegroundService : Service() {
         prefs = AgentPrefs(this)
         createChannel()
         acquireWakeLock()
+        scheduleWatchdog(this)
         startForeground(1, notification(text = "客服服务正在运行", ongoing = true, alert = false))
     }
 
@@ -56,23 +77,14 @@ class AgentForegroundService : Service() {
     override fun onDestroy() {
         webSocket?.close(1000, "service_destroy")
         stopEmergencyRing()
+        if (::prefs.isInitialized && prefs.token.isNotBlank()) scheduleWatchdog(this)
         releaseWakeLock()
         scope.cancel()
         super.onDestroy()
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        val restart = PendingIntent.getService(
-            this,
-            100,
-            Intent(this, AgentForegroundService::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        (getSystemService(ALARM_SERVICE) as AlarmManager).set(
-            AlarmManager.RTC_WAKEUP,
-            System.currentTimeMillis() + 1000,
-            restart
-        )
+        scheduleWatchdog(this)
         super.onTaskRemoved(rootIntent)
     }
 
@@ -220,12 +232,12 @@ class AgentForegroundService : Service() {
 
     private fun notifyNormal(text: String) {
         playNormalRing()
-        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(2, notification("agent-popup-v2", text, ongoing = false, emergency = false, alert = true))
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(2, notification(NORMAL_CHANNEL_ID, text, ongoing = false, emergency = false, alert = true))
     }
 
     private fun notifyEmergency(text: String) {
         startEmergencyRing()
-        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(3, notification("emergency", text, ongoing = false, emergency = true))
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(3, notification(EMERGENCY_CHANNEL_ID, text, ongoing = false, emergency = true))
     }
 
     private fun notification(channelId: String = "agent", text: String, ongoing: Boolean, emergency: Boolean = false, alert: Boolean = false): Notification {
@@ -258,13 +270,13 @@ class AgentForegroundService : Service() {
             description = "保持客服后台连接"
             setShowBadge(false)
         })
-        manager.createNotificationChannel(NotificationChannel("agent-popup-v2", "客户新消息弹窗", NotificationManager.IMPORTANCE_MAX).apply {
+        manager.createNotificationChannel(NotificationChannel(NORMAL_CHANNEL_ID, "客户新消息弹窗", NotificationManager.IMPORTANCE_MAX).apply {
             description = "客户发送新消息时弹窗和亮屏提醒"
             enableVibration(true)
             vibrationPattern = longArrayOf(0, 300, 120, 300)
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         })
-        val emergencyChannel = NotificationChannel("emergency", "紧急呼叫", NotificationManager.IMPORTANCE_MAX).apply {
+        val emergencyChannel = NotificationChannel(EMERGENCY_CHANNEL_ID, "紧急呼叫", NotificationManager.IMPORTANCE_MAX).apply {
             description = "紧急客服呼叫提醒"
             enableVibration(true)
             vibrationPattern = longArrayOf(0, 700, 300, 700, 300, 700)

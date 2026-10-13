@@ -20,6 +20,7 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+        <receiver android:name=".ServiceWatchdogReceiver" android:exported="false" />
         <service android:name=".AgentForegroundService" android:exported="false" android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

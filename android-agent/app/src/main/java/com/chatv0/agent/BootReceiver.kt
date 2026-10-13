@@ -10,6 +10,7 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
         val prefs = AgentPrefs(context)
         if (prefs.token.isBlank()) return
-        ContextCompat.startForegroundService(context, Intent(context, AgentForegroundService::class.java))
+        AgentForegroundService.scheduleWatchdog(context)
+        runCatching { ContextCompat.startForegroundService(context, Intent(context, AgentForegroundService::class.java)) }
     }
 }

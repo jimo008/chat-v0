@@ -186,11 +186,16 @@ class AgentForegroundService : Service() {
                     }
                     prefs.bumpCustomerListVersion()
                     if (payload?.optString("sender_type") == "customer") {
-                        val content = when (payload.optString("type")) {
-                            "image" -> "[图片消息]"
-                            else -> payload.optString("content").ifBlank { "新的客户消息" }
+                        val messageId = payload.optLong("id", 0L)
+                        val messageSeq = payload.optLong("seq", 0L)
+                        if (messageId > 0L && !prefs.hasNotifiedMessage(messageId) && shouldNotifyCustomerMessage(conversationId, messageSeq)) {
+                            val content = when (payload.optString("type")) {
+                                "image" -> "[图片消息]"
+                                else -> payload.optString("content").ifBlank { "新的客户消息" }
+                            }
+                            prefs.markNotifiedMessage(messageId)
+                            notifyNormal(if (conversationId > 0) "#$conversationId $content" else content)
                         }
-                        notifyNormal(if (conversationId > 0) "#$conversationId $content" else content)
                     }
                 }
                 "CUSTOMER_READ_UPDATED", "MESSAGE_READ" -> {
@@ -220,6 +225,26 @@ class AgentForegroundService : Service() {
                 }
             }
         }
+    }
+
+    private fun shouldNotifyCustomerMessage(conversationId: Long, messageSeq: Long): Boolean {
+        if (conversationId <= 0L || messageSeq <= 0L) return true
+        val token = prefs.token
+        val baseUrl = prefs.baseUrl
+        if (token.isBlank() || baseUrl.isBlank()) return true
+        val req = Request.Builder()
+            .url(baseUrl + "/api/v1/agent/conversations/" + conversationId + "?after_seq=" + (messageSeq - 1) + "&limit=1")
+            .header("Authorization", "Bearer " + token)
+            .build()
+        return runCatching {
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@use true
+                val root = JSONObject(resp.body?.string().orEmpty())
+                val readState = root.optJSONObject("read_state")
+                val agentLastSeenSeq = readState?.optLong("agent_last_seen_seq", 0L) ?: 0L
+                messageSeq > agentLastSeenSeq
+            }
+        }.getOrDefault(true)
     }
 
     private fun scheduleReconnect() {

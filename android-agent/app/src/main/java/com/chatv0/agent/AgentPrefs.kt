@@ -157,8 +157,25 @@ class AgentPrefs(context: Context) {
         }
     }
 
+    fun hasNotifiedMessage(messageId: Long): Boolean {
+        if (messageId <= 0L) return false
+        return prefs.getStringSet("notified_message_ids", emptySet()).orEmpty().contains(messageId.toString())
+    }
+
+    fun markNotifiedMessage(messageId: Long) {
+        if (messageId <= 0L) return
+        val existing = prefs.getStringSet("notified_message_ids", emptySet()).orEmpty()
+        val next = (existing + messageId.toString())
+            .mapNotNull { it.toLongOrNull() }
+            .sortedDescending()
+            .take(300)
+            .map { it.toString() }
+            .toSet()
+        prefs.edit().putStringSet("notified_message_ids", next).apply()
+    }
+
     fun clearAuth() {
-        prefs.edit().remove("token").remove("last_seq").remove("customers_json").apply()
+        prefs.edit().remove("token").remove("last_seq").remove("customers_json").remove("notified_message_ids").apply()
     }
 }
 

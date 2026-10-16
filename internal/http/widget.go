@@ -177,7 +177,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     .site { font-size: 12px; color: #cbd5e1; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .messages { flex: 1; padding: 14px; overflow-y: auto; background: #f8fafc; display: flex; flex-direction: column; gap: 10px; }
     .msg { max-width: 82%; padding: 9px 10px; border-radius: 8px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
-    .msgBody { white-space: pre-wrap; word-break: break-word; }
+    .msgBody { white-space: pre-wrap; word-break: break-word; -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
     .msgMeta { margin-top: 5px; font-size: 11px; opacity: .76; display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
     .agent .msgMeta { justify-content: flex-start; color: #64748b; }
     .retryLink { border: 0; height: auto; padding: 0; background: transparent; color: #fecaca; font-size: 11px; font-weight: 700; }

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -488,7 +489,9 @@ fun MessageBubble(message: ChatMessage, prefs: AgentPrefs, customerLastSeenSeq: 
                     if (message.type == "image" && message.attachmentId != null) {
                         AttachmentImage(prefs, message.attachmentId)
                     } else {
-                        Text(message.content, color = if (isMine) Color.White else Color(0xFF111827))
+                        SelectionContainer {
+                            Text(message.content, color = if (isMine) Color.White else Color(0xFF111827))
+                        }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(formatTime(message.createdAt), style = MaterialTheme.typography.labelSmall, color = if (isMine) Color(0xFFE0E7FF) else Color(0xFF64748B))

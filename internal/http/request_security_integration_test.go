@@ -40,7 +40,7 @@ func TestRequestSecurityIntegration(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: redisAddr, DB: 15})
 	defer rdb.Close()
 	_ = rdb.Del(context.Background(), securityPolicyCacheKey).Err()
-	_, err = db.Exec(`UPDATE security_policy SET require_site_key = FALSE, require_device_proof = FALSE WHERE id = 1`)
+	_, err = db.Exec(`UPDATE security_policy SET require_site_key = FALSE, require_device_proof = FALSE, pairing_code_hash = NULL WHERE id = 1`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,39 +93,66 @@ func TestRequestSecurityIntegration(t *testing.T) {
 		_ = json.Unmarshal(raw, &data)
 		return resp, data, req
 	}
-	pairCode := func() string {
-		resp, data, _ := call("POST", "/api/v1/admin/device-pairings", map[string]any{}, "integration-admin", "", nil, "")
-		if resp.StatusCode != 201 {
+	setPairCode := func(code string) {
+		resp, data, _ := call("POST", "/api/v1/admin/device-pairings", map[string]any{"pairing_code": code}, "integration-admin", "", nil, "")
+		if resp.StatusCode != 200 || data["pairing_code_configured"] != true || data["pairing_code"] != nil {
 			t.Fatalf("pairing code: %d %+v", resp.StatusCode, data)
 		}
-		return data["pairing_code"].(string)
 	}
 	device1, device2 := "phone-1-"+suffix, "phone-2-"+suffix
 	legacy := map[string]any{"login": login, "password": password, "device_id": device1}
 	resp, _, _ := call("POST", "/api/v1/agent/login", legacy, "", "", nil, "")
-	if resp.StatusCode != 200 {
-		t.Fatal("old apps must keep working until strict mode is enabled")
+	if resp.StatusCode != 403 || resp.Header.Get("X-Chat-Security-Reject") != "pairing_code_required" {
+		t.Fatal("login without a pairing code must be rejected for banning")
 	}
 	key1, public1 := testDeviceKey(t)
-	code := pairCode()
+	code := "Integration-Fixed-Code-42"
+	resp, data, _ := call("POST", "/api/v1/admin/device-pairings", map[string]any{}, "integration-admin", "", nil, "")
+	if resp.StatusCode != 400 {
+		t.Fatal("empty setup must not generate a code automatically")
+	}
+	resp, _, _ = call("POST", "/api/v1/admin/device-pairings", map[string]any{"pairing_code": code}, "not-admin", "", nil, "")
+	if resp.StatusCode == 200 {
+		t.Fatal("only an administrator may set the fixed code")
+	}
 	paired := map[string]any{"login": login, "password": password, "device_id": device1, "device_public_key": public1, "pairing_code": code}
-	resp, data, _ := call("POST", "/api/v1/agent/login", paired, "", "", key1, device1)
+	resp, data, _ = call("POST", "/api/v1/agent/login", paired, "", "", key1, device1)
+	if resp.StatusCode != 503 || data["error"] != "pairing_code_not_configured" {
+		t.Fatalf("unset pairing code must fail closed: %d %+v", resp.StatusCode, data)
+	}
+	setPairCode(code)
+	var storedHash string
+	if err := db.QueryRow(`SELECT pairing_code_hash FROM security_policy WHERE id = 1`).Scan(&storedHash); err != nil || storedHash == code || !security.CheckPassword(storedHash, code) {
+		t.Fatal("fixed code must be stored only as a password hash")
+	}
+	resp, data, _ = call("POST", "/api/v1/agent/login", paired, "", "", key1, device1)
 	if resp.StatusCode != 200 || data["device_paired"] != true {
 		t.Fatalf("pair first phone: %d %+v", resp.StatusCode, data)
 	}
 	token1 := data["token"].(string)
 	key2, public2 := testDeviceKey(t)
-	second := map[string]any{"login": login, "password": password, "device_id": device2, "device_public_key": public2, "pairing_code": code}
-	resp, _, _ = call("POST", "/api/v1/agent/login", second, "", "", key2, device2)
-	if resp.StatusCode != 403 {
-		t.Fatal("a pairing code must be single-use")
+	second := map[string]any{"login": login, "password": password, "device_id": device2, "device_public_key": public2, "pairing_code": "wrong-fixed-code"}
+	resp, data, _ = call("POST", "/api/v1/agent/login", second, "", "", key2, device2)
+	if resp.StatusCode != 403 || data["error"] != "pairing_code_invalid" || resp.Header.Get("X-Chat-Security-Reject") != "" {
+		t.Fatal("wrong code must fail without permanently banning a typo")
 	}
-	second["pairing_code"] = pairCode()
+	second["pairing_code"] = code
 	resp, data, _ = call("POST", "/api/v1/agent/login", second, "", "", key2, device2)
 	if resp.StatusCode != 200 {
 		t.Fatalf("pair second phone: %d %+v", resp.StatusCode, data)
 	}
 	token2 := data["token"].(string)
+	setPairCode("Rotated-Fixed-Code-43")
+	resp, data, _ = call("POST", "/api/v1/agent/login", second, "", "", key2, device2)
+	if resp.StatusCode != 403 || data["error"] != "pairing_code_invalid" {
+		t.Fatal("rotating the fixed code must immediately invalidate the old value")
+	}
+	second["pairing_code"] = "Rotated-Fixed-Code-43"
+	resp, data, _ = call("POST", "/api/v1/agent/login", second, "", "", key2, device2)
+	if resp.StatusCode != 200 {
+		t.Fatalf("paired devices must also supply the current fixed code: %d %+v", resp.StatusCode, data)
+	}
+	token2 = data["token"].(string)
 	policy := map[string]bool{"require_site_key": true, "require_device_proof": true}
 	resp, data, _ = call("PATCH", "/api/v1/admin/security", policy, "integration-admin", "", nil, "")
 	if resp.StatusCode != 200 {

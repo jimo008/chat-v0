@@ -16,8 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/jimo008/chat-v0/internal/security"
 )
 
 type deviceProofError struct {
@@ -89,36 +87,16 @@ func checkDeviceSignature(r *http.Request, body []byte, publicKey, deviceID stri
 }
 
 func (s *Server) preflightDeviceLogin(w http.ResponseWriter, r *http.Request, req agentLoginRequest, body []byte) bool {
-	policy, err := s.loadSecurityPolicy(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "security_policy_unavailable"})
+	if strings.TrimSpace(req.PairingCode) == "" {
+		s.rejectSecurity(w, r, "pairing_code_required")
 		return false
 	}
-	if req.PublicKey == "" && !policy.RequireDeviceProof {
-		return true
+	if req.PublicKey == "" {
+		s.rejectSecurity(w, r, "device_pairing_required")
+		return false
 	}
 	if err := checkDeviceSignature(r, body, req.PublicKey, req.DeviceID, time.Now()); err != nil {
 		s.writeAgentAuthError(w, r, err)
-		return false
-	}
-	if !policy.RequireDeviceProof {
-		return true
-	}
-	var known int
-	if err := s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM agent_devices WHERE device_id = ? AND public_key = ?`, req.DeviceID, req.PublicKey).Scan(&known); err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "device_lookup_unavailable"})
-		return false
-	}
-	if known > 0 {
-		return true
-	}
-	var codes int
-	if err := s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM agent_pairing_codes WHERE code_hash = ? AND used_at IS NULL AND expires_at > NOW(3)`, security.TokenHash(strings.ToLower(strings.TrimSpace(req.PairingCode)))).Scan(&codes); err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "pairing_lookup_unavailable"})
-		return false
-	}
-	if codes != 1 {
-		s.rejectSecurity(w, r, "unpaired_device")
 		return false
 	}
 	return true

@@ -53,18 +53,30 @@ func requestSiteKey(r *http.Request) string {
 }
 
 func (s *Server) adminPairingCode(w http.ResponseWriter, r *http.Request) {
-	code, err := security.NewToken(8)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "pairing_code_failed"})
+	var req struct {
+		Code string `json:"pairing_code"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	if json.NewDecoder(r.Body).Decode(&req) != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
 		return
 	}
-	expires := time.Now().Add(20 * time.Minute)
-	if _, err := s.db.ExecContext(r.Context(), `INSERT INTO agent_pairing_codes (code_hash, expires_at) VALUES (?, NOW(3) + INTERVAL 20 MINUTE)`, security.TokenHash(code)); err != nil {
+	code := strings.TrimSpace(req.Code)
+	if len(code) < 8 || len(code) > 64 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "pairing_code_length_8_to_64"})
+		return
+	}
+	hash, err := security.HashPassword(code)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "pairing_code_hash_failed"})
+		return
+	}
+	if _, err := s.db.ExecContext(r.Context(), `UPDATE security_policy SET pairing_code_hash = ? WHERE id = 1`, hash); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "pairing_code_store_failed"})
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusCreated, map[string]any{"pairing_code": code, "expires_at": expires, "uses": 1})
+	writeJSON(w, http.StatusOK, map[string]any{"pairing_code_configured": true})
 }
 
 func (s *Server) adminSecurityStatus(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +90,12 @@ func (s *Server) adminSecurityStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "security_devices_failed"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"policy": policy, "paired_devices": paired, "recent_unpaired_devices": unpaired})
+	var configured bool
+	if err := s.db.QueryRowContext(r.Context(), `SELECT pairing_code_hash IS NOT NULL AND pairing_code_hash <> '' FROM security_policy WHERE id = 1`).Scan(&configured); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "security_policy_failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"policy": policy, "paired_devices": paired, "recent_unpaired_devices": unpaired, "pairing_code_configured": configured})
 }
 
 func (s *Server) adminSetSecurity(w http.ResponseWriter, r *http.Request) {
@@ -88,6 +105,11 @@ func (s *Server) adminSetSecurity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if policy.RequireDeviceProof {
+		var configured bool
+		if err := s.db.QueryRowContext(r.Context(), `SELECT pairing_code_hash IS NOT NULL AND pairing_code_hash <> '' FROM security_policy WHERE id = 1`).Scan(&configured); err != nil || !configured {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "set_fixed_pairing_code_before_enforcing"})
+			return
+		}
 		var paired int
 		if err := s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM agent_devices WHERE public_key IS NOT NULL AND public_key <> ''`).Scan(&paired); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "security_devices_failed"})

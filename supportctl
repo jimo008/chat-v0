@@ -209,7 +209,30 @@ cmd_site_code() {
 
 cmd_device_pair_code() {
   require_env
-  api_curl POST /api/v1/admin/device-pairings '{}'
+  case "$(base_url)" in
+    https://*|http://127.0.0.1:*|http://localhost:*) ;;
+    *) echo "Use HTTPS or a loopback APP_BASE_URL before setting a pairing code." >&2; return 1 ;;
+  esac
+  local code confirm
+  read -r -s -p "Set fixed pairing code (8-64 bytes): " code
+  printf '\n'
+  read -r -s -p "Confirm pairing code: " confirm
+  printf '\n'
+  if [[ "$code" != "$confirm" || "$code" == *$'\r'* || "$code" == *$'\t'* ]]; then
+    echo "Codes do not match or contain unsupported characters." >&2
+    return 1
+  fi
+  local bytes
+  bytes=$(LC_ALL=C printf '%s' "$code" | wc -c)
+  if (( bytes < 8 || bytes > 64 )) || [[ "$code" == ' '* || "$code" == *' ' ]]; then
+    echo "Use 8-64 bytes without leading or trailing spaces." >&2
+    return 1
+  fi
+  printf '{"pairing_code":"%s"}' "$(json_escape "$code")" |
+    curl -fsS -X POST "$(base_url)/api/v1/admin/device-pairings" \
+      -H "Authorization: Bearer $(admin_token)" \
+      -H "Content-Type: application/json" --data-binary @-
+  unset code confirm
   echo
 }
 

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -83,11 +84,15 @@ func (s *Server) agentLogin(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	body, err := readProofBody(r)
 	if err != nil || json.Unmarshal(body, &req) != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
+		s.rejectSecurity(w, r, "invalid_device_proof")
 		return
 	}
 	login := strings.ToLower(strings.TrimSpace(req.Login))
 	deviceID := strings.TrimSpace(req.DeviceID)
+	if strings.TrimSpace(req.PairingCode) == "" {
+		s.rejectSecurity(w, r, "pairing_code_required")
+		return
+	}
 	if len(deviceID) > 128 || len(req.PublicKey) > 512 || len(req.PairingCode) > 64 {
 		s.rejectSecurity(w, r, "invalid_device_proof")
 		return
@@ -121,6 +126,16 @@ func (s *Server) agentLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "login_failed"})
 		return
 	}
+	attempts, err := s.redis.Eval(r.Context(), `local n = redis.call('INCR', KEYS[1]); if n == 1 then redis.call('EXPIRE', KEYS[1], 60) end; return n`, []string{fmt.Sprintf("chat-v0:pairing-login:%d", agent.ID)}).Int64()
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "pairing_lookup_unavailable"})
+		return
+	}
+	if attempts > 20 {
+		w.Header().Set("Retry-After", "60")
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "pairing_login_rate_limited"})
+		return
+	}
 	policy, err := s.loadSecurityPolicy(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "security_policy_unavailable"})
@@ -132,6 +147,19 @@ func (s *Server) agentLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	var pairingHash sql.NullString
+	if err := tx.QueryRowContext(r.Context(), `SELECT pairing_code_hash FROM security_policy WHERE id = 1 FOR SHARE`).Scan(&pairingHash); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "pairing_lookup_unavailable"})
+		return
+	}
+	if !pairingHash.Valid || pairingHash.String == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "pairing_code_not_configured"})
+		return
+	}
+	if !security.CheckPassword(pairingHash.String, strings.TrimSpace(req.PairingCode)) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "pairing_code_invalid"})
+		return
+	}
 	var storedKey sql.NullString
 	err = tx.QueryRowContext(r.Context(), `SELECT public_key FROM agent_devices WHERE agent_id = ? AND device_id = ? FOR UPDATE`, agent.ID, deviceID).Scan(&storedKey)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -150,23 +178,6 @@ func (s *Server) agentLogin(w http.ResponseWriter, r *http.Request) {
 		if err := s.verifyDeviceProof(r, body, publicKey, deviceID); err != nil {
 			s.writeAgentAuthError(w, r, err)
 			return
-		}
-		if publicKey != storedKey.String {
-			code := strings.ToLower(strings.TrimSpace(req.PairingCode))
-			if code == "" {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "pairing_code_required"})
-				return
-			}
-			result, err := tx.ExecContext(r.Context(), `UPDATE agent_pairing_codes SET used_at = NOW(3) WHERE code_hash = ? AND used_at IS NULL AND expires_at > NOW(3)`, security.TokenHash(code))
-			if err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "pairing_code_store_failed"})
-				return
-			}
-			used, _ := result.RowsAffected()
-			if used != 1 {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "pairing_code_invalid_or_expired"})
-				return
-			}
 		}
 	}
 

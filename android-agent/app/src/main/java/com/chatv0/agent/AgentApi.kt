@@ -16,6 +16,7 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
 
     fun login(login: String, password: String, deviceId: String, pairingCode: String = ""): String {
         require(baseUrl.startsWith("https://")) { "设备配对和登录请使用 HTTPS 服务器地址" }
+        require(pairingCode.isNotBlank()) { "请输入服务器设置的固定配对码" }
         val json = JSONObject(mapOf("login" to login, "password" to password, "device_id" to deviceId,
             "device_public_key" to AgentDeviceIdentity.publicKey(), "pairing_code" to pairingCode.trim()))
         val req = Request.Builder().url("$baseUrl/api/v1/agent/login").post(jsonBody(json)).build()
@@ -165,7 +166,10 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
         }
     }
     private fun loginError(code: String, status: Int): String = when (code) {
-        "pairing_code_required" -> "请输入服务器生成的一次性配对码"
+        "pairing_code_required" -> "请输入服务器设置的固定配对码"
+        "pairing_code_invalid" -> "固定配对码不正确"
+        "pairing_code_not_configured" -> "管理员尚未在服务器设置固定配对码"
+        "pairing_login_rate_limited" -> "登录尝试过多，请一分钟后重试"
         "pairing_code_invalid_or_expired" -> "配对码无效、已使用或已过期"
         "device_clock_out_of_sync" -> "手机时间不准确，请开启自动时间"
         "device_request_replayed" -> "请求已失效，请重试"

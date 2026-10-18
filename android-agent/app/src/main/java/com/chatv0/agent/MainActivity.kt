@@ -100,9 +100,7 @@ fun LoginScreen(prefs: AgentPrefs, onLoggedIn: (String) -> Unit) {
         OutlinedTextField(baseUrl, { baseUrl = it }, label = { Text("服务器地址") }, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(login, { login = it }, label = { Text("用户名或邮箱") }, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(password, { password = it }, label = { Text("密码") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-        if (!prefs.isPairedFor(baseUrl.trimEnd('/'))) {
-            OutlinedTextField(pairingCode, { pairingCode = it }, label = { Text("一次性配对码") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        }
+        OutlinedTextField(pairingCode, { pairingCode = it }, label = { Text("固定配对码") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(), singleLine = true)
         Text("本机设备：${prefs.deviceId.takeLast(12)}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF64748B))
         Button(onClick = {
             scope.launch {
@@ -110,6 +108,7 @@ fun LoginScreen(prefs: AgentPrefs, onLoggedIn: (String) -> Unit) {
                 runCatching {
                     withContext(Dispatchers.IO) {
                         val cleanBase = baseUrl.trimEnd('/')
+                        require(pairingCode.isNotBlank()) { "请输入服务器设置的固定配对码" }
                         val token = AgentApi(cleanBase).login(login, password, prefs.deviceId, pairingCode)
                         val me = AgentApi(cleanBase, token).me()
                         prefs.baseUrl = cleanBase

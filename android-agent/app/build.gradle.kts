@@ -12,8 +12,8 @@ android {
         applicationId = "com.chatv0.agent"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20261018
-        versionName = "0.2.0"
+        versionCode = 20261019
+        versionName = "0.2.1"
     }
 
     compileOptions {

@@ -7,6 +7,7 @@ on:
     paths:
       - "cmd/**"
       - "internal/**"
+      - "tests/**"
       - "migrations/**"
       - "go.mod"
       - "go.sum"
@@ -27,6 +28,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Test backend
+        run: go test ./...
+
+      - name: Test Widget identity handoff
+        run: node --test tests/widget_identity.test.mjs
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

@@ -33,43 +33,49 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
   iframe.style.background = "transparent";
   iframe.allow = "clipboard-write";
   var lastPostedIdentity = "";
+  var latestIdentity = null;
+  var latestIdentitySource = "";
+  var iframeReady = false;
+  var identityRetries = 0;
+  var identityRetryTimer = null;
   function postIdentity(identity, source){
     if (!identity) return;
     var identityKey = "";
     try { identityKey = JSON.stringify({id: identity.xboard_user_id || identity.id || identity.user_id || identity.uuid || "", email: identity.email || ""}); } catch(e) {}
+    if (!latestIdentity || identityKey !== JSON.stringify({id:latestIdentity.xboard_user_id, email:latestIdentity.email})) identityRetries = 0;
+    latestIdentity = identity;
+    latestIdentitySource = source;
+    if (!iframeReady) return;
     if (identityKey && identityKey === lastPostedIdentity) return;
     lastPostedIdentity = identityKey;
     console.info("[chat-v0] xboard identity detected from " + source + " id=" + (identity.xboard_user_id || identity.id || identity.user_id || identity.uuid || "") + " email=" + (identity.email || ""), identity);
     iframe.contentWindow.postMessage({type:"chat-v0:xboard-identity", identity: identity, source: source}, "%s");
   }
   function normalizeXBoardInfo(raw){
+    if (!raw || raw.status === "fail" || raw.error) return null;
     var root = raw && (raw.data && (raw.data.user || raw.data.info || raw.data) || raw.user || raw);
     if (!root) return null;
-    var id = root.xboard_user_id || root.user_id || root.id || root.uuid || deepFind(raw, ["xboard_user_id", "user_id", "uuid", "id"]);
-    var email = root.email || root.mail || root.account || root.username || deepFind(raw, ["email", "mail"]);
+    var id = root.xboard_user_id || root.user_id || root.id || root.uuid;
+    var email = root.email;
     if (!id || !email) return null;
     return {
       xboard_user_id: String(id),
       email: String(email),
-      plan: root.plan || root.plan_name || root.group || "",
+      plan: String(root.plan && typeof root.plan === "object" ? (root.plan.name || root.plan.plan_name || "") : (root.plan || root.plan_name || root.group || "")),
       expire_time: root.expire_time || root.expired_at || root.expiredAt || null,
-      used_traffic: root.used_traffic || root.u || null,
-      all_traffic: root.all_traffic || root.transfer_enable || null,
+      used_traffic: optionalTraffic(root.used_traffic != null ? root.used_traffic : root.u),
+      all_traffic: optionalTraffic(root.all_traffic != null ? root.all_traffic : root.transfer_enable),
       raw_profile: raw
     };
   }
-  function deepFind(obj, keys, depth){
-    depth = depth || 0;
-    if (!obj || typeof obj !== "object" || depth > 4) return "";
-    for (var i = 0; i < keys.length; i++) {
-      if (obj[keys[i]] !== undefined && obj[keys[i]] !== null && obj[keys[i]] !== "") return obj[keys[i]];
-    }
-    for (var k in obj) {
-      if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
-      var found = deepFind(obj[k], keys, depth + 1);
-      if (found) return found;
-    }
-    return "";
+  function optionalTraffic(value){
+    if (value == null || value === "") return null;
+    var number = Number(value);
+    return isFinite(number) && number >= 0 ? Math.floor(number) : null;
+  }
+  function isXBoardInfoURL(value){
+    try { return new URL(value, window.location.href).pathname.replace(/\/$/, "") === "/api/v1/user/info"; }
+    catch(e) { return false; }
   }
   function inspectXBoardPayload(payload, source){
     var identity = normalizeXBoardInfo(payload);
@@ -86,7 +92,7 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
           try {
             var url = "";
             try { url = String(args[0] && (args[0].url || args[0]) || ""); } catch(e) {}
-            if (/\/api\/v1\/user\/info/i.test(url)) {
+            if (isXBoardInfoURL(url)) {
               resp.clone().json().then(function(data){ inspectXBoardPayload(data, "xboard fetch " + url); }).catch(function(){});
             }
           } catch(e) {}
@@ -106,8 +112,8 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
         };
         xhr.addEventListener("load", function(){
           try {
-            if (/\/api\/v1\/user\/info/i.test(url)) {
-              inspectXBoardPayload(JSON.parse(xhr.responseText), "xboard xhr " + url);
+            if (isXBoardInfoURL(url)) {
+              inspectXBoardPayload(xhr.responseType === "json" ? xhr.response : JSON.parse(xhr.responseText), "xboard xhr " + url);
             }
           } catch(e) {}
         });
@@ -118,10 +124,14 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
   installResponseHooks();
   function sendIdentity(){
     if (window.SupportChatIdentity) {
-      postIdentity(window.SupportChatIdentity, "SupportChatIdentity");
+      var identity = normalizeXBoardInfo(window.SupportChatIdentity);
+      if (identity) postIdentity(identity, "SupportChatIdentity");
+    } else if (latestIdentity) {
+      postIdentity(latestIdentity, latestIdentitySource);
     }
   }
-  iframe.addEventListener("load", sendIdentity);
+  function frameReady(){ iframeReady = true; lastPostedIdentity = ""; sendIdentity(); }
+  iframe.addEventListener("load", frameReady);
   var lastIdentity = "";
   setInterval(function(){
     var next = "";
@@ -132,8 +142,19 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
     }
   }, 2000);
   window.addEventListener("message", function(ev){
-    if (ev.origin !== "%s") return;
+    if (ev.origin !== "%s" || ev.source !== iframe.contentWindow) return;
     var data = ev.data || {};
+    if (data.type === "chat-v0:ready") { frameReady(); return; }
+    if (data.type === "chat-v0:identity-result") {
+      if (data.key !== lastPostedIdentity) return;
+      if (data.ok) { if (identityRetryTimer) clearTimeout(identityRetryTimer); return; }
+      if (identityRetries < 3) {
+        identityRetries++;
+        lastPostedIdentity = "";
+        identityRetryTimer = setTimeout(sendIdentity, 2000);
+      }
+      return;
+    }
     if (data.type !== "chat-v0:resize") return;
     iframe.style.width = data.open ? "360px" : "118px";
     iframe.style.height = data.open ? "560px" : "48px";
@@ -269,6 +290,13 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   var initialScrollLocked = false;
   var allowOlderLoad = false;
   var readTimer = null;
+  var identityVersion = 0;
+  var identityLoginPromise = null;
+  var activeIdentityKey = "";
+  var completedIdentityKey = "";
+  var guestSessionPromise = null;
+  var parentOrigin = "*";
+  try { if (entryURL) parentOrigin = new URL(entryURL).origin; } catch(e) {}
 
   function addSystem(text, kind){
     clearOnlySystem();
@@ -407,15 +435,24 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     delete btn.dataset.originalText;
   }
   function ensureGuestSession(){
+    if (identityLoginPromise) return identityLoginPromise.then(function(){ return ensureGuestSession(); });
     if (token) return Promise.resolve(token);
+    if (guestSessionPromise) return guestSessionPromise;
+    var version = identityVersion;
     addSystem("正在接入客服...");
-    return fetch(api + "/api/v1/customer/guest-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,last_support_entry_type:"web",last_support_entry_url:entryURL})})
+    guestSessionPromise = fetch(api + "/api/v1/customer/guest-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,last_support_entry_type:"web",last_support_entry_url:entryURL})})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
       .then(function(data){
+        if (version !== identityVersion) {
+          if (identityLoginPromise) return identityLoginPromise.then(function(){ if (!token) throw new Error("identity_changed"); return token; });
+          if (!token) throw new Error("identity_changed");
+          return token;
+        }
         token = data.token;
         localStorage.setItem(tokenKey, token);
         return token;
-      });
+      }).finally(function(){ guestSessionPromise = null; });
+    return guestSessionPromise;
   }
   function authHeaders(){ return token ? {"Authorization":"Bearer " + token, "Content-Type":"application/json"} : {"Content-Type":"application/json"}; }
   function scrollToBottom(){ messagesEl.scrollTop = messagesEl.scrollHeight; }
@@ -475,13 +512,15 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   }
   function loadConversation(incremental){
     if (!token) { showAuth(); return; }
+    var version = identityVersion;
     var url = api + "/api/v1/customer/conversation";
     if (incremental && maxMessageSeq > 0) url += "?after_seq=" + encodeURIComponent(maxMessageSeq);
     fetch(url, {headers: authHeaders()}).then(function(r){
+      if (version !== identityVersion) return null;
       if (r.status === 401) { token = ""; localStorage.removeItem(tokenKey); showAuth(); return null; }
       return r.json();
     }).then(function(data){
-      if (!data) return;
+      if (!data || version !== identityVersion) return;
       if (!incremental) {
         messagesEl.innerHTML = "";
         renderedMessages = {};
@@ -506,7 +545,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
         updateBadge();
         scheduleRead();
       }
-    }).catch(function(){ addSystem("连接客服失败"); showAuth(); });
+    }).catch(function(){ if (version === identityVersion) { addSystem("连接客服失败"); showAuth(); } });
   }
   function sendRead(){
     if (!canMarkRead()) return;
@@ -640,17 +679,43 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
       .finally(function(){ setLoading(cancelEmergencyBtn, false); });
   };
   window.addEventListener("message", function(ev){
+    if (ev.source !== window.parent || (parentOrigin !== "*" && ev.origin !== parentOrigin)) return;
     var data = ev.data || {};
     if (data.type !== "chat-v0:xboard-identity" || !data.identity) return;
     var id = data.identity;
+    var key = JSON.stringify({id:id.xboard_user_id || id.id || id.user_id || id.uuid || "", email:id.email || ""});
+    function identityResult(ok){ window.parent.postMessage({type:"chat-v0:identity-result", key:key, ok:ok}, parentOrigin); }
+    if (key === completedIdentityKey && !identityLoginPromise) { identityResult(true); return; }
+    if (key === activeIdentityKey && identityLoginPromise) return;
+    var version = ++identityVersion;
+    activeIdentityKey = key;
     console.info("[chat-v0] iframe received xboard identity", data.source || "unknown", id);
-    fetch(api + "/api/v1/customer/xboard-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,xboard_user_id:String(id.xboard_user_id || id.id || id.user_id || id.uuid || ""),email:id.email || "",plan:id.plan || id.subscription || "",expire_time:id.expire_time || id.expired_at || null,used_traffic:id.used_traffic || null,all_traffic:id.all_traffic || null,raw_profile:id.raw_profile || id,last_support_entry_type:"web",last_support_entry_url:entryURL})})
+    identityLoginPromise = fetch(api + "/api/v1/customer/xboard-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,xboard_user_id:String(id.xboard_user_id || id.id || id.user_id || id.uuid || ""),email:id.email || "",plan:id.plan || id.subscription || "",expire_time:id.expire_time || id.expired_at || null,used_traffic:id.used_traffic != null ? id.used_traffic : null,all_traffic:id.all_traffic != null ? id.all_traffic : null,raw_profile:id.raw_profile || id,last_support_entry_type:"web",last_support_entry_url:entryURL})})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
-      .then(function(data){ console.info("[chat-v0] xboard login success", data.customer); token = data.token; localStorage.setItem(tokenKey, token); showAuthed(); loadConversation(); })
-      .catch(function(err){ console.info("[chat-v0] xboard login failed", err); if(!token) { showAuthed(); addSystem("可以开始聊天了"); } });
+      .then(function(data){
+        if (version !== identityVersion) return;
+        console.info("[chat-v0] xboard login success", data.customer);
+        token = data.token;
+        localStorage.setItem(tokenKey, token);
+        completedIdentityKey = key;
+        lastReadSeq = 0;
+        unreadCount = 0;
+        countedAgentSeqs = {};
+        if (readTimer) clearTimeout(readTimer);
+        showAuthed();
+        loadConversation();
+        identityResult(true);
+      })
+      .catch(function(err){
+        if (version !== identityVersion) return;
+        console.info("[chat-v0] xboard login failed", err);
+        identityResult(false);
+        if(!token) { showAuthed(); addSystem("可以开始聊天了"); }
+      }).finally(function(){ if (version === identityVersion) identityLoginPromise = null; });
   });
   setOpen(false);
   loadConversation();
+  window.parent.postMessage({type:"chat-v0:ready"}, parentOrigin);
 })();
 </script>
 </body>

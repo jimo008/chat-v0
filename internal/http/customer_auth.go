@@ -146,6 +146,7 @@ func (s *Server) createGuestCustomer(ctx context.Context, tx *sql.Tx, siteID uin
 func (s *Server) customerXBoardLogin(w http.ResponseWriter, r *http.Request) {
 	var req xboardLoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.logger.Warn("xboard login invalid payload", "site_key", req.SiteKey, "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
 		return
 	}

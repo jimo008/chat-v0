@@ -33,6 +33,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /ws/agent", s.agentWebSocket)
 	mux.HandleFunc("GET /api/v1/version", s.version)
 	mux.Handle("POST /api/v1/admin/agents/init", s.requireAdmin(http.HandlerFunc(s.initAgent)))
+	mux.Handle("POST /api/v1/admin/device-pairings", s.requireAdmin(http.HandlerFunc(s.adminPairingCode)))
+	mux.Handle("GET /api/v1/admin/security", s.requireAdmin(http.HandlerFunc(s.adminSecurityStatus)))
+	mux.Handle("PATCH /api/v1/admin/security", s.requireAdmin(http.HandlerFunc(s.adminSetSecurity)))
 	mux.Handle("POST /api/v1/admin/sites", s.requireAdmin(http.HandlerFunc(s.createSite)))
 	mux.Handle("GET /api/v1/admin/sites", s.requireAdmin(http.HandlerFunc(s.listSites)))
 	mux.Handle("PATCH /api/v1/admin/sites/{site_key}", s.requireAdmin(http.HandlerFunc(s.renameSite)))
@@ -64,7 +67,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /api/v1/agent/conversations/{id}/images", s.requireAgent(http.HandlerFunc(s.agentUploadImage)))
 	mux.Handle("POST /api/v1/agent/customers/{id}/block", s.requireAgent(http.HandlerFunc(s.agentBlockCustomer)))
 	mux.Handle("POST /api/v1/agent/customers/{id}/unblock", s.requireAgent(http.HandlerFunc(s.agentUnblockCustomer)))
-	return s.withRequestLog(mux)
+	return s.withRequestLog(s.withCustomerSiteGate(mux))
 }
 
 func (s *Server) requireAdmin(next http.Handler) http.Handler {

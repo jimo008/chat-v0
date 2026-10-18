@@ -12,8 +12,8 @@ android {
         applicationId = "com.chatv0.agent"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 20261018
+        versionName = "0.2.0"
     }
 
     compileOptions {
@@ -26,6 +26,19 @@ android {
     }
 
     buildFeatures { compose = true }
+
+    signingConfigs {
+        create("release") {
+            System.getenv("ANDROID_RELEASE_KEYSTORE")?.let { storeFile = file(it) }
+            storePassword = System.getenv("ANDROID_RELEASE_STORE_PASSWORD")?.trim()
+            keyPassword = System.getenv("ANDROID_RELEASE_STORE_PASSWORD")?.trim()
+            keyAlias = "chat-v0-agent"
+            storeType = "PKCS12"
+        }
+    }
+    buildTypes {
+        getByName("release") { signingConfig = signingConfigs.getByName("release") }
+    }
 }
 
 dependencies {
@@ -39,4 +52,5 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     debugImplementation("androidx.compose.ui:ui-tooling:1.7.6")
+    testImplementation("junit:junit:4.13.2")
 }

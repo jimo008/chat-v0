@@ -9,6 +9,14 @@ import (
 )
 
 func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
+	siteKey := requestSiteKey(r)
+	if siteKey == "" {
+		s.widgetBootstrap(w, r)
+		return
+	}
+	if !s.validRequestSite(w, r, siteKey) {
+		return
+	}
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store, max-age=0")
 	w.WriteHeader(http.StatusOK)
@@ -19,7 +27,7 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
   if (document.getElementById("chat-v0-widget")) return;
   var iframe = document.createElement("iframe");
   iframe.id = "chat-v0-widget";
-  iframe.src = "%s/widget/frame?site=" + encodeURIComponent(site) + "&entry_url=" + encodeURIComponent(window.location.href);
+  iframe.src = "%s/widget/frame?site_key=" + encodeURIComponent(site) + "&entry_url=" + encodeURIComponent(window.location.href);
   iframe.title = "在线客服";
   iframe.style.position = "fixed";
   iframe.style.right = "18px";
@@ -164,7 +172,10 @@ func (s *Server) widgetJS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
-	siteKey := strings.TrimSpace(r.URL.Query().Get("site"))
+	siteKey := requestSiteKey(r)
+	if !s.validRequestSite(w, r, siteKey) {
+		return
+	}
 	siteLabel := "在线客服"
 	if site, err := s.findSiteByKey(r.Context(), siteKey); err == nil {
 		siteLabel = site.Name
@@ -403,7 +414,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     if (isNaN(d.getTime())) return plain ? plain[1] : "刚刚";
     return d.toLocaleTimeString("zh-CN", {hour:"2-digit", minute:"2-digit", hour12:false, timeZone:"Asia/Shanghai"});
   }
-  function attachmentURL(id){ return api + "/api/v1/customer/attachments/" + encodeURIComponent(id) + "?token=" + encodeURIComponent(token); }
+  function attachmentURL(id){ return api + "/api/v1/customer/attachments/" + encodeURIComponent(id) + "?site_key=" + encodeURIComponent(site) + "&token=" + encodeURIComponent(token); }
   function openImage(src){ lightboxImgEl.src = src; lightboxEl.style.display = "flex"; lightboxEl.classList.remove("hidden"); }
   lightboxEl.onclick = function(){ lightboxEl.style.display = "none"; lightboxEl.classList.add("hidden"); lightboxImgEl.src = ""; };
   function escapeHTML(text){ return String(text).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]); }); }
@@ -440,7 +451,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     if (guestSessionPromise) return guestSessionPromise;
     var version = identityVersion;
     addSystem("正在接入客服...");
-    guestSessionPromise = fetch(api + "/api/v1/customer/guest-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,last_support_entry_type:"web",last_support_entry_url:entryURL})})
+    guestSessionPromise = siteFetch(api + "/api/v1/customer/guest-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,last_support_entry_type:"web",last_support_entry_url:entryURL})})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
       .then(function(data){
         if (version !== identityVersion) {
@@ -455,6 +466,11 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     return guestSessionPromise;
   }
   function authHeaders(){ return token ? {"Authorization":"Bearer " + token, "Content-Type":"application/json"} : {"Content-Type":"application/json"}; }
+  function siteFetch(url, options){
+    options = options || {};
+    options.headers = Object.assign({}, options.headers || {}, {"X-Chat-Site-Key":site});
+    return fetch(url, options);
+  }
   function scrollToBottom(){ messagesEl.scrollTop = messagesEl.scrollHeight; }
   function scrollToBottomSoon(){
     scrollToBottom();
@@ -516,7 +532,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     var requestToken = token;
     var url = api + "/api/v1/customer/conversation";
     if (incremental && maxMessageSeq > 0) url += "?after_seq=" + encodeURIComponent(maxMessageSeq);
-    fetch(url, {headers: authHeaders()}).then(function(r){
+    siteFetch(url, {headers: authHeaders()}).then(function(r){
       if (version !== identityVersion || requestToken !== token) return null;
       if (r.status === 401) { token = ""; localStorage.removeItem(tokenKey); showAuth(); return null; }
       return r.json();
@@ -550,14 +566,14 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   }
   function sendRead(){
     if (!canMarkRead()) return;
-    fetch(api + "/api/v1/customer/read", {method:"POST", headers:authHeaders(), body:JSON.stringify({up_to_seq:lastReadSeq,visible:true,open:opened,opened_since_ms:Date.now() - panelVisibleSince})})
+    siteFetch(api + "/api/v1/customer/read", {method:"POST", headers:authHeaders(), body:JSON.stringify({up_to_seq:lastReadSeq,visible:true,open:opened,opened_since_ms:Date.now() - panelVisibleSince})})
       .then(function(){ unreadCount = 0; if (lastReadSeq) { seenAgentSeq = lastReadSeq; localStorage.setItem("chat_v0_seen_agent_seq_" + site, String(seenAgentSeq)); countedAgentSeqs = {}; } updateBadge(); })
       .catch(function(){});
   }
   function loadOlder(){
     if (!token || loadingOlder || !minMessageSeq || !allowOlderLoad) return;
     loadingOlder = true;
-    fetch(api + "/api/v1/customer/conversation?before_seq=" + encodeURIComponent(minMessageSeq), {headers: authHeaders()})
+    siteFetch(api + "/api/v1/customer/conversation?before_seq=" + encodeURIComponent(minMessageSeq), {headers: authHeaders()})
       .then(function(r){ return r.json(); })
       .then(function(data){ (data.messages || []).forEach(prependMessage); })
       .catch(function(){})
@@ -579,7 +595,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     appendMessage(pending);
     pendingEl = messagesEl.lastElementChild;
     ensureGuestSession().then(function(){
-      return fetch(api + "/api/v1/customer/messages", {method:"POST", headers:authHeaders(), body:JSON.stringify({type:"text",content:content,client_msg_id:localKey})});
+      return siteFetch(api + "/api/v1/customer/messages", {method:"POST", headers:authHeaders(), body:JSON.stringify({type:"text",content:content,client_msg_id:localKey})});
     })
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
       .then(function(data){
@@ -615,7 +631,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     form.append("file", file);
     setLoading(imageBtn, true, "上传中");
     ensureGuestSession().then(function(){
-      return fetch(api + "/api/v1/customer/images", {method:"POST", headers: token ? {"Authorization":"Bearer " + token} : {}, body: form});
+      return siteFetch(api + "/api/v1/customer/images", {method:"POST", headers: token ? {"Authorization":"Bearer " + token} : {}, body: form});
     })
       .then(function(r){
         return r.text().then(function(text){
@@ -632,7 +648,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   emergencyBtn.onclick = function(){
     setLoading(emergencyBtn, true, "呼叫中");
     ensureGuestSession().then(function(){
-      return fetch(api + "/api/v1/customer/emergency/start", {method:"POST", headers:authHeaders()});
+      return siteFetch(api + "/api/v1/customer/emergency/start", {method:"POST", headers:authHeaders()});
     })
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
       .then(function(){ startEmergencyCalling(); })
@@ -664,7 +680,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   }
   function checkEmergencyStatus(){
     if (!token) return;
-    fetch(api + "/api/v1/customer/emergency/status", {headers:authHeaders()})
+    siteFetch(api + "/api/v1/customer/emergency/status", {headers:authHeaders()})
       .then(function(r){ return r.json(); })
       .then(function(data){
         if (data.call_status === "ACCEPTED") { stopEmergencyCalling(); addSystem("客服已接听紧急呼叫", "success"); }
@@ -673,7 +689,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   }
   cancelEmergencyBtn.onclick = function(){
     setLoading(cancelEmergencyBtn, true, "取消中");
-    fetch(api + "/api/v1/customer/emergency/cancel", {method:"POST", headers:authHeaders()})
+    siteFetch(api + "/api/v1/customer/emergency/cancel", {method:"POST", headers:authHeaders()})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
       .then(function(){ stopEmergencyCalling(); addSystem("已取消紧急呼叫"); })
       .catch(function(){ addSystem("取消呼叫失败，请稍后再试", "error"); })
@@ -691,7 +707,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
     var version = ++identityVersion;
     activeIdentityKey = key;
     console.info("[chat-v0] iframe received xboard identity", data.source || "unknown", id);
-    identityLoginPromise = fetch(api + "/api/v1/customer/xboard-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,xboard_user_id:String(id.xboard_user_id || id.id || id.user_id || id.uuid || ""),email:id.email || "",plan:id.plan || id.subscription || "",expire_time:id.expire_time || id.expired_at || null,used_traffic:id.used_traffic != null ? id.used_traffic : null,all_traffic:id.all_traffic != null ? id.all_traffic : null,raw_profile:id.raw_profile || id,last_support_entry_type:"web",last_support_entry_url:entryURL})})
+    identityLoginPromise = siteFetch(api + "/api/v1/customer/xboard-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({site_key:site,xboard_user_id:String(id.xboard_user_id || id.id || id.user_id || id.uuid || ""),email:id.email || "",plan:id.plan || id.subscription || "",expire_time:id.expire_time || id.expired_at || null,used_traffic:id.used_traffic != null ? id.used_traffic : null,all_traffic:id.all_traffic != null ? id.all_traffic : null,raw_profile:id.raw_profile || id,last_support_entry_type:"web",last_support_entry_url:entryURL})})
       .then(function(r){ return r.json().then(function(data){ if(!r.ok) throw data; return data; }); })
       .then(function(data){
         if (version !== identityVersion) return;

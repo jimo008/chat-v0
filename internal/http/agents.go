@@ -20,9 +20,11 @@ type initAgentRequest struct {
 }
 
 type agentLoginRequest struct {
-	Login    string `json:"login"`
-	Password string `json:"password"`
-	DeviceID string `json:"device_id"`
+	Login       string `json:"login"`
+	Password    string `json:"password"`
+	DeviceID    string `json:"device_id"`
+	PublicKey   string `json:"device_public_key"`
+	PairingCode string `json:"pairing_code"`
 }
 
 type agentDTO struct {
@@ -78,14 +80,23 @@ func (s *Server) initAgent(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) agentLogin(w http.ResponseWriter, r *http.Request) {
 	var req agentLoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	body, err := readProofBody(r)
+	if err != nil || json.Unmarshal(body, &req) != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
 		return
 	}
 	login := strings.ToLower(strings.TrimSpace(req.Login))
 	deviceID := strings.TrimSpace(req.DeviceID)
+	if len(deviceID) > 128 || len(req.PublicKey) > 512 || len(req.PairingCode) > 64 {
+		s.rejectSecurity(w, r, "invalid_device_proof")
+		return
+	}
 	if login == "" || req.Password == "" || deviceID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "login_password_device_required"})
+		return
+	}
+	if !s.preflightDeviceLogin(w, r, req, body) {
 		return
 	}
 
@@ -95,7 +106,7 @@ func (s *Server) agentLogin(w http.ResponseWriter, r *http.Request) {
 		Email        string
 		PasswordHash string
 	}
-	err := s.db.QueryRowContext(
+	err = s.db.QueryRowContext(
 		r.Context(),
 		`SELECT id, username, email, password_hash FROM agents WHERE LOWER(username) = ? OR LOWER(email) = ? LIMIT 1`,
 		login,
@@ -110,6 +121,54 @@ func (s *Server) agentLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "login_failed"})
 		return
 	}
+	policy, err := s.loadSecurityPolicy(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "security_policy_unavailable"})
+		return
+	}
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "device_login_failed"})
+		return
+	}
+	defer tx.Rollback()
+	var storedKey sql.NullString
+	err = tx.QueryRowContext(r.Context(), `SELECT public_key FROM agent_devices WHERE agent_id = ? AND device_id = ? FOR UPDATE`, agent.ID, deviceID).Scan(&storedKey)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "device_lookup_failed"})
+		return
+	}
+	publicKey := strings.TrimSpace(req.PublicKey)
+	if publicKey == "" {
+		publicKey = storedKey.String
+	}
+	if publicKey == "" && policy.RequireDeviceProof {
+		s.rejectSecurity(w, r, "device_pairing_required")
+		return
+	}
+	if publicKey != "" {
+		if err := s.verifyDeviceProof(r, body, publicKey, deviceID); err != nil {
+			s.writeAgentAuthError(w, r, err)
+			return
+		}
+		if publicKey != storedKey.String {
+			code := strings.ToLower(strings.TrimSpace(req.PairingCode))
+			if code == "" {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "pairing_code_required"})
+				return
+			}
+			result, err := tx.ExecContext(r.Context(), `UPDATE agent_pairing_codes SET used_at = NOW(3) WHERE code_hash = ? AND used_at IS NULL AND expires_at > NOW(3)`, security.TokenHash(code))
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "pairing_code_store_failed"})
+				return
+			}
+			used, _ := result.RowsAffected()
+			if used != 1 {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "pairing_code_invalid_or_expired"})
+				return
+			}
+		}
+	}
 
 	token, err := security.NewToken(32)
 	if err != nil {
@@ -119,14 +178,15 @@ func (s *Server) agentLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	tokenHash := security.TokenHash(token)
 
-	_, err = s.db.ExecContext(
+	_, err = tx.ExecContext(
 		r.Context(),
-		`INSERT INTO agent_devices (agent_id, device_id, token_hash, last_sync_at)
-		 VALUES (?, ?, ?, NOW(3))
-		 ON DUPLICATE KEY UPDATE token_hash = VALUES(token_hash), last_sync_at = NOW(3), updated_at = NOW(3)`,
+		`INSERT INTO agent_devices (agent_id, device_id, token_hash, public_key, last_sync_at)
+		 VALUES (?, ?, ?, ?, NOW(3))
+		 ON DUPLICATE KEY UPDATE token_hash = VALUES(token_hash), public_key = VALUES(public_key), last_sync_at = NOW(3), updated_at = NOW(3)`,
 		agent.ID,
 		deviceID,
 		tokenHash,
+		nullableString(publicKey),
 	)
 	if err != nil {
 		var mysqlErr *mysql.MySQLError
@@ -138,9 +198,14 @@ func (s *Server) agentLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "device_login_failed"})
 		return
 	}
+	if err := tx.Commit(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "device_login_commit_failed"})
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"agent": agentDTO{ID: agent.ID, Username: agent.Username, Email: agent.Email},
-		"token": token,
+		"agent":         agentDTO{ID: agent.ID, Username: agent.Username, Email: agent.Email},
+		"token":         token,
+		"device_paired": publicKey != "",
 	})
 }

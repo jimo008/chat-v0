@@ -7,6 +7,17 @@ import java.util.UUID
 
 class AgentPrefs(context: Context) {
     private val prefs = context.getSharedPreferences("agent", Context.MODE_PRIVATE)
+    init { AgentDeviceIdentity.initialize(deviceId) }
+
+    fun isPairedFor(url: String): Boolean {
+        val key = AgentDeviceIdentity.publicKey(create = false)
+        return key.isNotBlank() && prefs.getString("paired_server", "") == url.trimEnd('/') && prefs.getString("paired_public_key", "") == key
+    }
+
+    fun markDevicePaired(url: String) {
+        prefs.edit().putString("paired_server", url.trimEnd('/'))
+            .putString("paired_public_key", AgentDeviceIdentity.publicKey()).apply()
+    }
 
     var baseUrl: String
         get() = prefs.getString("base_url", "") ?: ""

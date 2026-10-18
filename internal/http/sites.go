@@ -161,5 +161,5 @@ func randomSiteKey() (string, error) {
 }
 
 func (s *Server) deploymentCode(siteKey string) string {
-	return fmt.Sprintf(`<script src="%s/widget.js" data-site="%s"></script>`, strings.TrimRight(s.cfg.AppBaseURL, "/"), siteKey)
+	return fmt.Sprintf(`<script src="%s/widget.js?site_key=%s" data-site="%s"></script>`, strings.TrimRight(s.cfg.AppBaseURL, "/"), siteKey, siteKey)
 }

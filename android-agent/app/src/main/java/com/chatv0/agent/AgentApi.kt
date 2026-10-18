@@ -12,14 +12,18 @@ import java.time.OffsetDateTime
 import java.util.concurrent.TimeUnit
 
 class AgentApi(private val baseUrl: String, private val token: String = "") {
-    private val client = OkHttpClient.Builder().callTimeout(60, TimeUnit.SECONDS).build()
+    private val client = OkHttpClient.Builder().addInterceptor(AgentDeviceProofInterceptor()).callTimeout(60, TimeUnit.SECONDS).build()
 
-    fun login(login: String, password: String, deviceId: String): String {
-        val json = JSONObject(mapOf("login" to login, "password" to password, "device_id" to deviceId))
+    fun login(login: String, password: String, deviceId: String, pairingCode: String = ""): String {
+        require(baseUrl.startsWith("https://")) { "设备配对和登录请使用 HTTPS 服务器地址" }
+        val json = JSONObject(mapOf("login" to login, "password" to password, "device_id" to deviceId,
+            "device_public_key" to AgentDeviceIdentity.publicKey(), "pairing_code" to pairingCode.trim()))
         val req = Request.Builder().url("$baseUrl/api/v1/agent/login").post(jsonBody(json)).build()
         client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) error("登录失败: ${resp.code}")
-            return JSONObject(resp.body?.string().orEmpty()).getString("token")
+            val result = JSONObject(resp.body?.string().orEmpty())
+            if (!resp.isSuccessful) error(loginError(result.optString("error"), resp.code))
+            check(result.optBoolean("device_paired")) { "服务器尚未支持设备配对，请先更新服务端" }
+            return result.getString("token")
         }
     }
 
@@ -137,7 +141,7 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
     private fun getJson(path: String): JSONObject {
         val req = Request.Builder().url(baseUrl + path).headers(authHeaders()).build()
         client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) error("请求失败: ${resp.code}")
+            if (!resp.isSuccessful) requestError(resp)
             return JSONObject(resp.body?.string().orEmpty())
         }
     }
@@ -145,13 +149,29 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
     private fun postJson(path: String, json: JSONObject): JSONObject {
         val req = Request.Builder().url(baseUrl + path).headers(authHeaders()).post(jsonBody(json)).build()
         client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) error("请求失败: ${resp.code}")
+            if (!resp.isSuccessful) requestError(resp)
             val body = resp.body?.string().orEmpty()
             return if (body.isBlank()) JSONObject() else JSONObject(body)
         }
     }
 
     private fun authHeaders(): Headers = Headers.Builder().add("Authorization", "Bearer $token").build()
+    private fun requestError(response: Response): Nothing {
+        val code = runCatching { JSONObject(response.peekBody(4096).string()).optString("error") }.getOrDefault("")
+        when (code) {
+            "device_clock_out_of_sync" -> error("手机时间不准确，请开启自动时间")
+            "device_request_replayed" -> error("请求已失效，请重试")
+            else -> error("请求失败: ${response.code}")
+        }
+    }
+    private fun loginError(code: String, status: Int): String = when (code) {
+        "pairing_code_required" -> "请输入服务器生成的一次性配对码"
+        "pairing_code_invalid_or_expired" -> "配对码无效、已使用或已过期"
+        "device_clock_out_of_sync" -> "手机时间不准确，请开启自动时间"
+        "device_request_replayed" -> "请求已失效，请重试"
+        "invalid_credentials" -> "用户名或密码错误"
+        else -> "登录失败: $status ($code)"
+    }
     private fun jsonBody(json: JSONObject): RequestBody = json.toString().toRequestBody("application/json".toMediaType())
     private fun imageError(code: String, status: Int): String = when (code) {
         "file_too_large" -> "图片太大，请选择 30MB 以内的图片"
@@ -160,6 +180,11 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
         "storage_prepare_failed", "storage_write_failed" -> "图片存储失败，请检查服务器上传目录权限"
         else -> "图片上传失败: $status"
     }
+}
+
+internal fun recoverableDeviceError(response: Response): Boolean {
+    val code = runCatching { JSONObject(response.peekBody(4096).string()).optString("error") }.getOrDefault("")
+    return code == "device_clock_out_of_sync" || code == "device_request_replayed"
 }
 
 private fun parseTimeMillis(value: String): Long =

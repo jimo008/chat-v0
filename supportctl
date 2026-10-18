@@ -19,6 +19,10 @@ Usage:
   ./supportctl site list
   ./supportctl site rename <site_key>
   ./supportctl site code <site_key>
+  ./supportctl device pair-code
+  ./supportctl security status
+  ./supportctl security enable
+  ./supportctl security disable
 
 V1 admin is CLI-first. Web admin is intentionally not included.
 USAGE
@@ -200,7 +204,24 @@ cmd_site_code() {
     echo "Usage: ./supportctl site code <site_key>" >&2
     exit 1
   fi
-  echo "<script src=\"$(base_url)/widget.js\" data-site=\"${site_key}\"></script>"
+  echo "<script src=\"$(base_url)/widget.js?site_key=${site_key}\" data-site=\"${site_key}\"></script>"
+}
+
+cmd_device_pair_code() {
+  require_env
+  api_curl POST /api/v1/admin/device-pairings '{}'
+  echo
+}
+
+cmd_security() {
+  require_env
+  case "${1:-status}" in
+    status) api_curl GET /api/v1/admin/security ;;
+    enable) api_curl PATCH /api/v1/admin/security '{"require_site_key":true,"require_device_proof":true}' ;;
+    disable) api_curl PATCH /api/v1/admin/security '{"require_site_key":false,"require_device_proof":false}' ;;
+    *) usage; exit 1 ;;
+  esac
+  echo
 }
 
 main() {
@@ -218,6 +239,14 @@ main() {
     logs) shift; cmd_logs "$@" ;;
     backup) shift; cmd_backup "$@" ;;
     init-agent) shift; cmd_init_agent "$@" ;;
+    security) shift; cmd_security "$@" ;;
+    device)
+      shift
+      case "${1:-}" in
+        pair-code) shift; cmd_device_pair_code "$@" ;;
+        *) usage; exit 1 ;;
+      esac
+      ;;
     site)
       shift
       case "${1:-}" in

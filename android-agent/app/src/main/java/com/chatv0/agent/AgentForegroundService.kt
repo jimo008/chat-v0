@@ -22,6 +22,8 @@ class AgentForegroundService : Service() {
         private const val EMERGENCY_CHANNEL_ID = "emergency-v2"
 
         fun scheduleWatchdog(context: android.content.Context) {
+            val prefs = AgentPrefs(context)
+            if (prefs.token.isBlank() || !prefs.isPairedFor(prefs.baseUrl)) return
             val intent = Intent(context, ServiceWatchdogReceiver::class.java)
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
@@ -39,7 +41,7 @@ class AgentForegroundService : Service() {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val client = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
+    private val client = OkHttpClient.Builder().addInterceptor(AgentDeviceProofInterceptor()).pingInterval(20, TimeUnit.SECONDS).build()
     private lateinit var prefs: AgentPrefs
     private var webSocket: WebSocket? = null
     private var emergencyRingtone: Ringtone? = null
@@ -52,12 +54,18 @@ class AgentForegroundService : Service() {
         super.onCreate()
         prefs = AgentPrefs(this)
         createChannel()
-        acquireWakeLock()
-        scheduleWatchdog(this)
+        if (prefs.token.isNotBlank() && prefs.isPairedFor(prefs.baseUrl)) {
+            acquireWakeLock()
+            scheduleWatchdog(this)
+        }
         startForeground(1, notification(text = "客服服务正在运行", ongoing = true, alert = false))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!prefs.isPairedFor(prefs.baseUrl) || prefs.token.isBlank()) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (intent?.action == ACTION_STOP_RING) {
             stopEmergencyRing()
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(3)
@@ -92,8 +100,8 @@ class AgentForegroundService : Service() {
         val token = prefs.token
         val baseUrl = prefs.baseUrl
         if (token.isBlank() || baseUrl.isBlank()) return
-        val wsUrl = baseUrl.replaceFirst("http", "ws") + "/ws/agent?token=" + token + "&after_seq=" + prefs.lastSeq
-        val req = Request.Builder().url(wsUrl).build()
+        val wsUrl = baseUrl.replaceFirst("http", "ws") + "/ws/agent?after_seq=" + prefs.lastSeq
+        val req = Request.Builder().url(wsUrl).header("Authorization", "Bearer $token").build()
         webSocket = client.newWebSocket(req, object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) { handleEventEnvelope(text) }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -132,7 +140,7 @@ class AgentForegroundService : Service() {
             .build()
         runCatching {
             client.newCall(req).execute().use { resp ->
-                if (resp.code == 401) {
+                if (resp.code == 401 && !recoverableDeviceError(resp)) {
                     prefs.clearAuth()
                     return
                 }
@@ -155,7 +163,7 @@ class AgentForegroundService : Service() {
                 .build()
             runCatching {
                 client.newCall(req).execute().use { resp ->
-                    if (resp.code == 401) {
+                    if (resp.code == 401 && !recoverableDeviceError(resp)) {
                         prefs.clearAuth()
                         return@use
                     }

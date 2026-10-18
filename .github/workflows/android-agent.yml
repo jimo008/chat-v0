@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "android-agent/**"
+      - "tests/device_proof_message.txt"
       - "build.gradle.kts"
       - "gradle.properties"
       - "settings.gradle.kts"
@@ -34,18 +35,24 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Create debug signing key
+      - name: Prepare private release signing key
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
         run: |
-          mkdir -p ~/.android
-          cp android-agent/debug.keystore ~/.android/debug.keystore
+          test -n "$RELEASE_KEYSTORE_BASE64"
+          umask 077
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/chat-v0-release.p12"
 
-      - name: Build debug APK
-        run: gradle :android-agent:app:assembleDebug
+      - name: Test protocol and build signed release APK
+        env:
+          ANDROID_RELEASE_KEYSTORE: ${{ runner.temp }}/chat-v0-release.p12
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+        run: gradle :android-agent:app:testReleaseUnitTest :android-agent:app:assembleRelease
 
       - name: Prepare latest APK
         run: |
           mkdir -p release
-          cp android-agent/app/build/outputs/apk/debug/app-debug.apk release/support-agent-latest.apk
+          cp android-agent/app/build/outputs/apk/release/app-release.apk release/support-agent-latest.apk
 
       - name: Verify APK signature
         run: $ANDROID_HOME/build-tools/35.0.0/apksigner verify --print-certs release/support-agent-latest.apk
@@ -53,7 +60,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: chat-v0-agent-debug-apk
+          name: chat-v0-agent-release-apk
           path: release/support-agent-latest.apk
 
       - name: Publish fixed latest APK link
@@ -61,4 +68,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release view android-latest >/dev/null 2>&1 || gh release create android-latest --title "Android Agent Latest" --notes "Latest debug APK for testing."
+          gh release edit android-latest --notes "Signed release APK with device pairing. Replace the old debug-signed test app before installing this first private-signed release."
           gh release upload android-latest release/support-agent-latest.apk --clobber

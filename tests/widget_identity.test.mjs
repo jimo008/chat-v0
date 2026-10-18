@@ -134,6 +134,7 @@ test('iframe ignores identity from unrelated windows or origins', () => {
   assert.equal(h.requests.length, 0);
   h.receive(identity());
   assert.equal(h.requests.length, 1);
+  assert.equal(h.requests[0].options.headers['X-Chat-Site-Key'], 'st_test');
 });
 
 test('duplicate ready/load delivery creates only one identity login', async () => {

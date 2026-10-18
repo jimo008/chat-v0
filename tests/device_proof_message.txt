@@ -1,0 +1,8 @@
+chat-v0-device-v1
+android-test-device
+1792288800
+00112233445566778899aabbccddeeff
+POST
+/api/v1/agent/conversations/1/messages?after_seq=42
+Bearer test-token
+20b2dda940d741d9780897200aaef2ef356ab32b38c7de0d94306fb5a66b4a8e

@@ -22,7 +22,14 @@ var wsUpgrader = websocket.Upgrader{
 func (s *Server) agentWebSocket(w http.ResponseWriter, r *http.Request) {
 	agent, err := s.authenticateAgentRequest(r)
 	if err != nil {
+		if s.rejectUnknownAgent(w, r) {
+			return
+		}
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	if err := s.verifyAuthenticatedDevice(r, agent); err != nil {
+		s.writeAgentAuthError(w, r, err)
 		return
 	}
 
@@ -84,15 +91,17 @@ func (s *Server) authenticateAgentRequest(r *http.Request) (authenticatedAgent, 
 
 func (s *Server) agentByToken(ctx context.Context, token string) (authenticatedAgent, error) {
 	var agent authenticatedAgent
+	var publicKey sql.NullString
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT a.id, d.id, d.device_id, a.username, a.email
+		`SELECT a.id, d.id, d.device_id, a.username, a.email, d.public_key
 		 FROM agent_devices d
 		 JOIN agents a ON a.id = d.agent_id
 		 WHERE d.token_hash = ?
 		 LIMIT 1`,
 		security.TokenHash(token),
-	).Scan(&agent.AgentID, &agent.DeviceID, &agent.DeviceKey, &agent.Username, &agent.Email)
+	).Scan(&agent.AgentID, &agent.DeviceID, &agent.DeviceKey, &agent.Username, &agent.Email, &publicKey)
+	agent.PublicKey = publicKey.String
 	return agent, err
 }
 

@@ -513,14 +513,15 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
   function loadConversation(incremental){
     if (!token) { showAuth(); return; }
     var version = identityVersion;
+    var requestToken = token;
     var url = api + "/api/v1/customer/conversation";
     if (incremental && maxMessageSeq > 0) url += "?after_seq=" + encodeURIComponent(maxMessageSeq);
     fetch(url, {headers: authHeaders()}).then(function(r){
-      if (version !== identityVersion) return null;
+      if (version !== identityVersion || requestToken !== token) return null;
       if (r.status === 401) { token = ""; localStorage.removeItem(tokenKey); showAuth(); return null; }
       return r.json();
     }).then(function(data){
-      if (!data || version !== identityVersion) return;
+      if (!data || version !== identityVersion || requestToken !== token) return;
       if (!incremental) {
         messagesEl.innerHTML = "";
         renderedMessages = {};
@@ -545,7 +546,7 @@ func (s *Server) widgetFrame(w http.ResponseWriter, r *http.Request) {
         updateBadge();
         scheduleRead();
       }
-    }).catch(function(){ if (version === identityVersion) { addSystem("连接客服失败"); showAuth(); } });
+    }).catch(function(){ if (version === identityVersion && requestToken === token) { addSystem("连接客服失败"); showAuth(); } });
   }
   function sendRead(){
     if (!canMarkRead()) return;

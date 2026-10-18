@@ -57,8 +57,9 @@ function parentHarness() {
   return { window, iframe, posts, fetches, timers, receive };
 }
 
-function frameHarness() {
+function frameHarness(harnessOptions = {}) {
   const elements = new Map(), requests = [], posts = [], storage = new Map(), listeners = {};
+  if (harnessOptions.token) storage.set('chat_v0_token_st_test', harnessOptions.token);
   const parent = { postMessage: (data, origin) => posts.push({ data, origin }) };
   const window = { parent, addEventListener(name, fn) { listeners[name] = fn; } };
   const document = {
@@ -67,10 +68,10 @@ function frameHarness() {
     querySelector: () => element(), createElement: () => element(), addEventListener() {},
   };
   const fetch = (url, options) => {
-    if (url.startsWith('/api/v1/customer/conversation')) return Promise.resolve(response({ messages: [] }));
+    if (url.startsWith('/api/v1/customer/conversation') && !harnessOptions.deferConversations) return Promise.resolve(response({ messages: [] }));
     const pending = deferred(); requests.push({ url, options, pending }); return pending.promise;
   };
-  const instrumented = frameScript.replace('  setOpen(false);', '  window.testSession = { ensureGuestSession: ensureGuestSession };\n  setOpen(false);');
+  const instrumented = frameScript.replace('  setOpen(false);', '  window.testSession = { ensureGuestSession: ensureGuestSession, loadConversation: loadConversation };\n  setOpen(false);');
   vm.runInNewContext(instrumented, { window, document, URL, fetch, FormData: class {}, localStorage: { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) }, console: { info() {} }, setInterval() {}, clearInterval() {}, setTimeout() { return 1; }, clearTimeout() {}, requestAnimationFrame() {} });
   function receive(value, overrides = {}) { listeners.message({ source: parent, origin: 'https://xboard.example', data: { type: 'chat-v0:xboard-identity', identity: value }, ...overrides }); }
   return { window, storage, requests, posts, receive };
@@ -167,6 +168,19 @@ test('sending while identity login is pending waits instead of creating a guest'
   h.requests[0].pending.resolve(response({ token: 'signed-in-token', customer: {} }));
   assert.equal(await session, 'signed-in-token');
   assert.equal(h.requests.length, 1);
+});
+
+test('a late guest conversation 401 cannot clear the newly authenticated token', async () => {
+  const h = frameHarness({ token: 'old-guest-token', deferConversations: true });
+  h.receive(identity());
+  h.window.testSession.loadConversation(true);
+  const login = h.requests.find(request => request.url.endsWith('/xboard-login'));
+  const guestPoll = h.requests.at(-1);
+  login.pending.resolve(response({ token: 'signed-in-token', customer: {} }));
+  await tick();
+  guestPoll.pending.resolve(response({}, 401));
+  await tick();
+  assert.equal(h.storage.get('chat_v0_token_st_test'), 'signed-in-token');
 });
 
 test('rapid account switches keep the newest identity, even when requests finish out of order', async () => {

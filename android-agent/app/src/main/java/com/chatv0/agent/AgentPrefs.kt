@@ -6,6 +6,7 @@ import org.json.JSONObject
 import java.util.UUID
 
 class AgentPrefs(context: Context) {
+    companion object { private val sessionLock = Any() }
     private val prefs = context.getSharedPreferences("agent", Context.MODE_PRIVATE)
     init { AgentDeviceIdentity.initialize(deviceId) }
 
@@ -34,6 +35,39 @@ class AgentPrefs(context: Context) {
     var lastSeq: Long
         get() = prefs.getLong("last_seq", 0L)
         set(value) = prefs.edit().putLong("last_seq", value).apply()
+
+    var syncInitialized: Boolean
+        get() = prefs.getBoolean("sync_initialized_v2", false)
+        set(value) { prefs.edit().putBoolean("sync_initialized_v2", value).commit() }
+
+    fun beginSession(url: String, agentId: Long, newToken: String, username: String) = synchronized(sessionLock) {
+        val identity = url.trimEnd('/') + ":" + agentId
+        val editor = prefs.edit()
+        if (prefs.getString("sync_identity", "") != identity) {
+            for (key in prefs.all.keys) {
+                if (key.startsWith("conversation_") || key == "customers_json" || key == "last_seq" || key == "notified_message_ids") editor.remove(key)
+            }
+        }
+        editor.putString("sync_identity", identity).putString("base_url", url)
+            .putString("login", username).putString("token", newToken)
+            .putBoolean("sync_initialized_v2", false).commit()
+    }
+
+    fun clearAuthIfToken(expected: String): Boolean = synchronized(sessionLock) {
+        if (token != expected || expected.isBlank()) return@synchronized false
+        clearAuth()
+        true
+    }
+
+    fun completeSnapshot(expected: String, head: Long, customers: String): Boolean = synchronized(sessionLock) {
+        if (token != expected || expected.isBlank()) return@synchronized false
+        prefs.edit().putString("customers_json", customers).putLong("last_seq", head)
+            .putBoolean("sync_initialized_v2", true).putLong("customer_list_version", customerListVersion + 1).commit()
+    }
+
+    fun inSession(expected: String, action: () -> Unit) = synchronized(sessionLock) {
+        if (expected.isNotBlank() && token == expected) action()
+    }
 
     var acceptEmergency: Boolean
         get() = prefs.getBoolean("accept_emergency", false)
@@ -185,8 +219,8 @@ class AgentPrefs(context: Context) {
         prefs.edit().putStringSet("notified_message_ids", next).apply()
     }
 
-    fun clearAuth() {
-        prefs.edit().remove("token").remove("last_seq").remove("customers_json").remove("notified_message_ids").apply()
+    fun clearAuth() = synchronized(sessionLock) {
+        prefs.edit().remove("token").commit()
     }
 }
 

@@ -75,11 +75,18 @@ class MainActivity : ComponentActivity() {
 fun AgentApp(prefs: AgentPrefs, onStartService: () -> Unit) {
     var token by remember { mutableStateOf(if (prefs.isPairedFor(prefs.baseUrl)) prefs.token else "") }
     var selected by remember { mutableStateOf<CustomerItem?>(null) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            val current = if (prefs.isPairedFor(prefs.baseUrl)) prefs.token else ""
+            if (current != token) { token = current; selected = null }
+            delay(1000)
+        }
+    }
     MaterialTheme {
         if (token.isBlank()) {
             LoginScreen(prefs) { newToken -> token = newToken; onStartService() }
         } else if (selected == null) {
-            CustomerListScreen(prefs, onLogout = { prefs.clearAuth(); token = "" }, onSelect = { selected = it }, onStartService = onStartService, onAuthExpired = { prefs.clearAuth(); token = "" })
+            CustomerListScreen(prefs, onLogout = { prefs.clearAuth(); token = "" }, onSelect = { selected = it }, onStartService = onStartService, onAuthExpired = { expected -> if (prefs.clearAuthIfToken(expected)) token = "" })
         } else {
             ConversationScreen(prefs, selected!!, onBack = { selected = null })
         }
@@ -93,6 +100,7 @@ fun LoginScreen(prefs: AgentPrefs, onLoggedIn: (String) -> Unit) {
     var login by remember { mutableStateOf(prefs.login) }
     var password by remember { mutableStateOf("") }
     var pairingCode by remember { mutableStateOf("") }
+    var loggingIn by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("未登录") }
 
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -103,28 +111,27 @@ fun LoginScreen(prefs: AgentPrefs, onLoggedIn: (String) -> Unit) {
         OutlinedTextField(pairingCode, { pairingCode = it }, label = { Text("固定配对码") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(), singleLine = true)
         Text("本机设备：${prefs.deviceId.takeLast(12)}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF64748B))
         Button(onClick = {
+            loggingIn = true
             scope.launch {
                 status = "登录中..."
                 runCatching {
                     withContext(Dispatchers.IO) {
                         val cleanBase = baseUrl.trimEnd('/')
                         require(pairingCode.isNotBlank()) { "请输入服务器设置的固定配对码" }
-                        val token = AgentApi(cleanBase).login(login, password, prefs.deviceId, pairingCode)
-                        val me = AgentApi(cleanBase, token).me()
-                        prefs.baseUrl = cleanBase
-                        prefs.login = login
-                        prefs.lastSeq = 0L
-                        prefs.token = token
+                        val result = AgentApi(cleanBase).login(login, password, prefs.deviceId, pairingCode)
+                        val token = result.token
+                        prefs.beginSession(cleanBase, result.agentId, token, login)
                         prefs.markDevicePaired(cleanBase)
-                        token to (me.optJSONObject("device")?.optString("device_id").orEmpty())
+                        token to prefs.deviceId
                     }
                 }.onSuccess { (newToken, serverDevice) ->
                     status = if (serverDevice.isBlank()) "登录成功" else "登录成功，设备 ${serverDevice.takeLast(12)}"
                     onLoggedIn(newToken)
                 }
-                    .onFailure { status = it.message ?: "登录失败" }
+                    .onFailure { status = connectionErrorMessage(it) }
+                loggingIn = false
             }
-        }, modifier = Modifier.fillMaxWidth()) { Text("登录并启动客服服务") }
+        }, enabled = !loggingIn, modifier = Modifier.fillMaxWidth()) { Text(if (loggingIn) "登录中..." else "登录并启动客服服务") }
         Text(status)
         Text("请在系统设置中允许通知、后台运行、自启动和电池无限制。", style = MaterialTheme.typography.bodySmall)
         PermissionButtons()
@@ -132,7 +139,7 @@ fun LoginScreen(prefs: AgentPrefs, onLoggedIn: (String) -> Unit) {
 }
 
 @Composable
-fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (CustomerItem) -> Unit, onStartService: () -> Unit, onAuthExpired: () -> Unit) {
+fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (CustomerItem) -> Unit, onStartService: () -> Unit, onAuthExpired: (String) -> Unit) {
     val scope = rememberCoroutineScope()
     var customers by remember { mutableStateOf<List<CustomerItem>>(emptyList()) }
     var status by remember { mutableStateOf("加载中") }
@@ -164,8 +171,8 @@ fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (Custo
                 }
                 deviceStatus = "设备：${active}/${arr.length()} 活跃" + if (current.isBlank()) "" else " · $current"
             }.onFailure {
-                if (AgentApi(prefs.baseUrl, prefs.token).isUnauthorized(it)) onAuthExpired()
-                deviceStatus = "设备状态获取失败"
+                if (it is AgentRequestException && it.invalidSession) onAuthExpired(it.requestToken)
+                deviceStatus = connectionErrorMessage(it)
             }
         }
     }
@@ -186,14 +193,16 @@ fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (Custo
     }
     LaunchedEffect(Unit) {
         onStartService()
-        val authOk = withContext(Dispatchers.IO) {
-            runCatching { AgentApi(prefs.baseUrl, prefs.token).me() }.isSuccess
+        val authResult = withContext(Dispatchers.IO) {
+            runCatching { AgentApi(prefs.baseUrl, prefs.token).me() }
         }
-        if (!authOk) {
+        val authError = authResult.exceptionOrNull()
+        if (authError is AgentRequestException && authError.invalidSession) {
             status = "登录已失效，请重新登录"
-            onAuthExpired()
+            onAuthExpired(authError.requestToken)
             return@LaunchedEffect
         }
+        if (authError != null) status = connectionErrorMessage(authError)
         val cached = prefs.cachedCustomers()
         if (cached.isNotBlank()) {
             runCatching { AgentApi(prefs.baseUrl, prefs.token).parseCustomers(JSONObject(cached)) }

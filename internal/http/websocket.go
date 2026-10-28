@@ -108,7 +108,13 @@ func (s *Server) agentByToken(ctx context.Context, token string) (authenticatedA
 func (s *Server) agentEvents(ctx context.Context, agentID, afterSeq uint64, limit int) (uint64, []map[string]any, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT e.event_id, e.seq, e.site_id, e.type, e.payload_json, e.created_at
+		`SELECT e.event_id, e.seq, e.site_id, e.type, e.payload_json, e.created_at,
+		 EXISTS(SELECT 1 FROM messages m JOIN conversations c ON c.id = m.conversation_id
+		   WHERE e.type = 'MESSAGE_CREATED' AND m.seq = CAST(JSON_UNQUOTE(JSON_EXTRACT(e.payload_json, '$.seq')) AS UNSIGNED)
+		   AND m.site_id = e.site_id AND m.sender_type = 'customer' AND m.seq > c.agent_last_seen_seq),
+		 EXISTS(SELECT 1 FROM emergency_calls ec WHERE e.type = 'EMERGENCY_STARTED'
+		   AND ec.id = CAST(JSON_UNQUOTE(JSON_EXTRACT(e.payload_json, '$.call_id')) AS UNSIGNED)
+		   AND ec.site_id = e.site_id AND ec.status = 'RINGING')
 		 FROM events e
 		 JOIN agent_site_access asa ON asa.site_id = e.site_id
 		 WHERE asa.agent_id = ? AND e.seq > ?
@@ -129,7 +135,8 @@ func (s *Server) agentEvents(ctx context.Context, agentID, afterSeq uint64, limi
 		var eventID, typ, payload string
 		var seq, siteID uint64
 		var createdAt time.Time
-		if err := rows.Scan(&eventID, &seq, &siteID, &typ, &payload, &createdAt); err != nil {
+		var notifyMessage, activeCall bool
+		if err := rows.Scan(&eventID, &seq, &siteID, &typ, &payload, &createdAt, &notifyMessage, &activeCall); err != nil {
 			return afterSeq, nil, err
 		}
 		if seq > latestSeq {
@@ -142,6 +149,7 @@ func (s *Server) agentEvents(ctx context.Context, agentID, afterSeq uint64, limi
 			"type":       typ,
 			"payload":    jsonRaw(payload),
 			"created_at": createdAt,
+			"notify":     notifyMessage || activeCall,
 		})
 	}
 	return latestSeq, events, rows.Err()

@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -189,6 +190,58 @@ func TestRequestSecurityIntegration(t *testing.T) {
 		t.Fatalf("valid site login: %d %+v", resp.StatusCode, data)
 	}
 	customerToken := data["token"].(string)
+	conversationID := uint64(data["customer"].(map[string]any)["conversation_id"].(float64))
+	var siteID, agentID uint64
+	if err := db.QueryRow(`SELECT id FROM sites WHERE site_key = ?`, siteKey).Scan(&siteID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT id FROM agents WHERE username = ?`, login).Scan(&agentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO agent_site_access (agent_id, site_id) VALUES (?, ?)`, agentID, siteID); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	for i := 0; i < 601; i++ {
+		if _, _, err := createEvent(context.Background(), tx, siteID, "TEST_HISTORY", map[string]any{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	resp, data, _ = call("GET", "/api/v1/agent/sync?bootstrap=true", nil, token1, "", key1, device1)
+	if resp.StatusCode != 200 || data["snapshot"] != true || len(data["events"].([]any)) != 0 || data["latest_seq"].(float64) < 601 {
+		t.Fatalf("bootstrap must skip the entire history: %d %+v", resp.StatusCode, data)
+	}
+	head := uint64(data["latest_seq"].(float64))
+	resp, _, _ = call("POST", "/api/v1/customer/messages", map[string]string{"content": "new unread", "type": "text"}, customerToken, siteKey, nil, "")
+	if resp.StatusCode != 201 {
+		t.Fatalf("send customer message: %d", resp.StatusCode)
+	}
+	resp, data, _ = call("GET", fmt.Sprintf("/api/v1/agent/sync?after_seq=%d", head), nil, token1, "", key1, device1)
+	if resp.StatusCode != 200 {
+		t.Fatalf("sync unread: %d %+v", resp.StatusCode, data)
+	}
+	events := data["events"].([]any)
+	if len(events) != 1 || events[0].(map[string]any)["notify"] != true {
+		t.Fatalf("new unread should alert: %+v", events)
+	}
+	resp, _, _ = call("POST", fmt.Sprintf("/api/v1/agent/conversations/%d/read", conversationID), map[string]any{}, token2, "", key2, device2)
+	if resp.StatusCode != 200 {
+		t.Fatalf("mark read: %d", resp.StatusCode)
+	}
+	_, data, _ = call("GET", fmt.Sprintf("/api/v1/agent/sync?after_seq=%d", head), nil, token1, "", key1, device1)
+	for _, raw := range data["events"].([]any) {
+		event := raw.(map[string]any)
+		if event["type"] == "MESSAGE_CREATED" && event["notify"] != false {
+			t.Fatal("messages read on another phone must not alert on replay")
+		}
+	}
 	resp, _, _ = call("GET", "/api/v1/customer/me", nil, customerToken, siteKey, nil, "")
 	if resp.StatusCode != 200 {
 		t.Fatal("valid site-bound customer rejected")

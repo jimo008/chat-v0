@@ -9,6 +9,8 @@ Thumbs.db
 *.pem
 *.key
 *.crt
+# Public CA trust anchor, not a private signing key.
+!android-agent/app/src/main/res/raw/isrg_root_x1.pem
 
 # Logs
 *.log

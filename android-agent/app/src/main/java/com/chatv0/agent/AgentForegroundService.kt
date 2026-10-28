@@ -49,6 +49,8 @@ class AgentForegroundService : Service() {
     private var syncJob: Job? = null
     private var reconnectJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var sessionToken = ""
+    private var lastNormalAlertAt = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -70,9 +72,17 @@ class AgentForegroundService : Service() {
             stopEmergencyRing()
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(3)
         }
+        if (sessionToken != prefs.token) {
+            sessionToken = prefs.token
+            syncJob?.cancel()
+            reconnectJob?.cancel()
+            webSocket?.cancel()
+            webSocket = null
+        }
         if (syncJob?.isActive != true) {
             syncJob = scope.launch {
-                bootstrapLastSeq()
+                while (isActive && !bootstrapLastSeq()) delay(3000)
+                if (!isActive || prefs.token.isBlank()) return@launch
                 if (webSocket == null) connectWebSocket()
                 syncLoop()
             }
@@ -103,14 +113,18 @@ class AgentForegroundService : Service() {
         val wsUrl = baseUrl.replaceFirst("http", "ws") + "/ws/agent?after_seq=" + prefs.lastSeq
         val req = Request.Builder().url(wsUrl).header("Authorization", "Bearer $token").build()
         webSocket = client.newWebSocket(req, object : WebSocketListener() {
-            override fun onMessage(webSocket: WebSocket, text: String) { handleEventEnvelope(text) }
+            override fun onMessage(webSocket: WebSocket, text: String) { handleEventEnvelope(text, token) }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                this@AgentForegroundService.webSocket = null
-                scheduleReconnect()
+                if (prefs.token == token && this@AgentForegroundService.webSocket === webSocket) {
+                    this@AgentForegroundService.webSocket = null
+                    scheduleReconnect()
+                }
             }
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                this@AgentForegroundService.webSocket = null
-                scheduleReconnect()
+                if (prefs.token == token && this@AgentForegroundService.webSocket === webSocket) {
+                    this@AgentForegroundService.webSocket = null
+                    scheduleReconnect()
+                }
             }
         })
     }
@@ -129,26 +143,28 @@ class AgentForegroundService : Service() {
         wakeLock = null
     }
 
-    private fun bootstrapLastSeq() {
-        if (prefs.lastSeq > 0L) return
+    private fun bootstrapLastSeq(): Boolean {
+        if (prefs.syncInitialized) return true
         val token = prefs.token
         val baseUrl = prefs.baseUrl
-        if (token.isBlank() || baseUrl.isBlank()) return
+        if (token.isBlank() || baseUrl.isBlank()) return false
         val req = Request.Builder()
-            .url(baseUrl + "/api/v1/agent/sync?after_seq=0")
+            .url(baseUrl + "/api/v1/agent/sync?bootstrap=true")
             .header("Authorization", "Bearer " + token)
             .build()
-        runCatching {
+        return runCatching {
             client.newCall(req).execute().use { resp ->
-                if (resp.code == 401 && !recoverableDeviceError(resp)) {
-                    prefs.clearAuth()
-                    return
+                if (invalidAgentSession(resp)) {
+                    prefs.clearAuthIfToken(token)
+                    return@use false
                 }
-                if (!resp.isSuccessful) return
+                if (!resp.isSuccessful || prefs.token != token) return@use false
                 val json = JSONObject(resp.body?.string().orEmpty())
-                if (json.has("latest_seq")) prefs.lastSeq = maxOf(prefs.lastSeq, json.optLong("latest_seq", 0L))
+                if (!json.optBoolean("snapshot") || !json.has("latest_seq")) return@use false
+                val customers = AgentApi(baseUrl, token).customersJson()
+                prefs.completeSnapshot(token, json.getLong("latest_seq"), customers.toString())
             }
-        }
+        }.getOrDefault(false)
     }
 
     private suspend fun syncLoop() {
@@ -163,23 +179,30 @@ class AgentForegroundService : Service() {
                 .build()
             runCatching {
                 client.newCall(req).execute().use { resp ->
-                    if (resp.code == 401 && !recoverableDeviceError(resp)) {
-                        prefs.clearAuth()
+                    if (invalidAgentSession(resp)) {
+                        prefs.clearAuthIfToken(token)
                         return@use
                     }
-                    if (resp.isSuccessful) handleEventEnvelope(resp.body?.string().orEmpty())
+                    if (resp.isSuccessful) handleEventEnvelope(resp.body?.string().orEmpty(), token)
                 }
             }
         }
     }
 
-    private fun handleEventEnvelope(text: String) {
+    private fun handleEventEnvelope(text: String, token: String) {
+        prefs.inSession(token) { applyEventEnvelope(text) }
+    }
+
+    private fun applyEventEnvelope(text: String) {
+        if (!prefs.syncInitialized) return
         val json = runCatching { JSONObject(text) }.getOrNull() ?: return
-        if (json.has("latest_seq")) prefs.lastSeq = maxOf(prefs.lastSeq, json.optLong("latest_seq", prefs.lastSeq))
         val events = json.optJSONArray("events") ?: return
+        val cursor = EventCursor(prefs.lastSeq)
+        var normalContent: String? = null
+        var normalCount = 0
         for (i in 0 until events.length()) {
             val event = events.getJSONObject(i)
-            prefs.lastSeq = maxOf(prefs.lastSeq, event.optLong("seq", prefs.lastSeq))
+            if (!cursor.accept(event.optLong("seq"))) continue
             when (event.optString("type")) {
                 "MESSAGE_CREATED" -> {
                     val payload = event.optJSONObject("payload") ?: event.optJSONObject("payload_json")
@@ -195,14 +218,14 @@ class AgentForegroundService : Service() {
                     prefs.bumpCustomerListVersion()
                     if (payload?.optString("sender_type") == "customer") {
                         val messageId = payload.optLong("id", 0L)
-                        val messageSeq = payload.optLong("seq", 0L)
-                        if (messageId > 0L && !prefs.hasNotifiedMessage(messageId) && shouldNotifyCustomerMessage(conversationId, messageSeq)) {
+                        if (messageId > 0L && !prefs.hasNotifiedMessage(messageId) && event.optBoolean("notify", false)) {
                             val content = when (payload.optString("type")) {
                                 "image" -> "[图片消息]"
                                 else -> payload.optString("content").ifBlank { "新的客户消息" }
                             }
                             prefs.markNotifiedMessage(messageId)
-                            notifyNormal(if (conversationId > 0) "#$conversationId $content" else content)
+                            normalContent = if (conversationId > 0) "#$conversationId $content" else content
+                            normalCount++
                         }
                     }
                 }
@@ -216,12 +239,16 @@ class AgentForegroundService : Service() {
                     }
                 }
                 "EMERGENCY_STARTED" -> {
+                    if (!event.optBoolean("notify", false)) {
+                        prefs.lastSeq = cursor.value
+                        continue
+                    }
                     val payload = event.optJSONObject("payload") ?: event.optJSONObject("payload_json")
                     val conversationId = payload?.optLong("conversation_id", 0L) ?: 0L
                     if (conversationId > 0L) prefs.updateCachedCustomerPreview(conversationId, "", ringingDelta = 1)
                     prefs.bumpCustomerListVersion()
                     val email = payload?.optString("customer_email").orEmpty()
-                    notifyEmergency(if (email.isBlank()) "有客户正在紧急呼叫" else "$email 正在紧急呼叫")
+                    if (event.optBoolean("notify", false)) notifyEmergency(if (email.isBlank()) "有客户正在紧急呼叫" else "$email 正在紧急呼叫")
                 }
                 "EMERGENCY_ACCEPTED", "EMERGENCY_CANCELLED", "EMERGENCY_EXPIRED" -> {
                     val payload = event.optJSONObject("payload") ?: event.optJSONObject("payload_json")
@@ -232,27 +259,15 @@ class AgentForegroundService : Service() {
                     (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(3)
                 }
             }
+            prefs.lastSeq = cursor.value
         }
-    }
-
-    private fun shouldNotifyCustomerMessage(conversationId: Long, messageSeq: Long): Boolean {
-        if (conversationId <= 0L || messageSeq <= 0L) return true
-        val token = prefs.token
-        val baseUrl = prefs.baseUrl
-        if (token.isBlank() || baseUrl.isBlank()) return true
-        val req = Request.Builder()
-            .url(baseUrl + "/api/v1/agent/conversations/" + conversationId + "?after_seq=" + (messageSeq - 1) + "&limit=1")
-            .header("Authorization", "Bearer " + token)
-            .build()
-        return runCatching {
-            client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return@use true
-                val root = JSONObject(resp.body?.string().orEmpty())
-                val readState = root.optJSONObject("read_state")
-                val agentLastSeenSeq = readState?.optLong("agent_last_seen_seq", 0L) ?: 0L
-                messageSeq > agentLastSeenSeq
+        if (normalContent != null) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (lastNormalAlertAt == 0L || now - lastNormalAlertAt >= 3000L) {
+                lastNormalAlertAt = now
+                notifyNormal(if (normalCount > 1) "$normalCount 条新消息：$normalContent" else normalContent!!)
             }
-        }.getOrDefault(true)
+        }
     }
 
     private fun scheduleReconnect() {
@@ -264,7 +279,6 @@ class AgentForegroundService : Service() {
     }
 
     private fun notifyNormal(text: String) {
-        playNormalRing()
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(2, notification(NORMAL_CHANNEL_ID, text, ongoing = false, emergency = false, alert = true))
     }
 

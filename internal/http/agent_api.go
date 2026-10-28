@@ -104,6 +104,15 @@ func (s *Server) agentSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Query().Get("bootstrap") == "true" {
+		var head uint64
+		if err := s.db.QueryRowContext(r.Context(), `SELECT COALESCE(MAX(e.seq), 0) FROM events e JOIN agent_site_access asa ON asa.site_id = e.site_id WHERE asa.agent_id = ?`, agent.AgentID).Scan(&head); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "sync_snapshot_failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"latest_seq": head, "events": []any{}, "snapshot": true})
+		return
+	}
 	latestSeq, events, err := s.agentEvents(r.Context(), agent.AgentID, afterSeq, 200)
 	if err != nil {
 		s.logger.Error("query sync events", "error", err)

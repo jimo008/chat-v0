@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit
 class AgentApi(private val baseUrl: String, private val token: String = "") {
     private val client = OkHttpClient.Builder().addInterceptor(AgentDeviceProofInterceptor()).callTimeout(60, TimeUnit.SECONDS).build()
 
-    fun login(login: String, password: String, deviceId: String, pairingCode: String = ""): String {
+    fun login(login: String, password: String, deviceId: String, pairingCode: String = ""): AgentLoginResult {
         require(baseUrl.startsWith("https://")) { "设备配对和登录请使用 HTTPS 服务器地址" }
         require(pairingCode.isNotBlank()) { "请输入服务器设置的固定配对码" }
         val json = JSONObject(mapOf("login" to login, "password" to password, "device_id" to deviceId,
@@ -24,7 +24,7 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
             val result = JSONObject(resp.body?.string().orEmpty())
             if (!resp.isSuccessful) error(loginError(result.optString("error"), resp.code))
             check(result.optBoolean("device_paired")) { "服务器尚未支持设备配对，请先更新服务端" }
-            return result.getString("token")
+            return AgentLoginResult(result.getString("token"), result.getJSONObject("agent").getLong("id"))
         }
     }
 
@@ -38,7 +38,7 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
 
     fun devicesJson(): JSONObject = getJson("/api/v1/agent/devices")
 
-    fun isUnauthorized(error: Throwable): Boolean = error.message?.contains("401") == true
+    fun isUnauthorized(error: Throwable): Boolean = error is AgentRequestException && error.invalidSession
 
     fun parseCustomers(root: JSONObject): List<CustomerItem> {
         val arr = root.optJSONArray("customers") ?: JSONArray()
@@ -162,7 +162,7 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
         when (code) {
             "device_clock_out_of_sync" -> error("手机时间不准确，请开启自动时间")
             "device_request_replayed" -> error("请求已失效，请重试")
-            else -> error("请求失败: ${response.code}")
+            else -> throw AgentRequestException(response.code, code, token)
         }
     }
     private fun loginError(code: String, status: Int): String = when (code) {
@@ -186,9 +186,29 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
     }
 }
 
+data class AgentLoginResult(val token: String, val agentId: Long)
+
+class AgentRequestException(val status: Int, val code: String, val requestToken: String) :
+    java.io.IOException("请求失败: $status ($code)") {
+    val invalidSession: Boolean get() = status == 401 && code in setOf("invalid_agent_token", "missing_agent_token", "agent_not_found")
+}
+
+internal fun connectionErrorMessage(error: Throwable): String {
+    if (generateSequence(error) { it.cause }.any { it is javax.net.ssl.SSLHandshakeException || it is java.security.cert.CertificateException }) {
+        return "HTTPS 证书校验失败，未发送登录资料。请检查手机自动时间，并切换 Wi-Fi/流量测试；请勿关闭证书校验。"
+    }
+    return error.message ?: "网络连接失败，请稍后重试"
+}
+
 internal fun recoverableDeviceError(response: Response): Boolean {
     val code = runCatching { JSONObject(response.peekBody(4096).string()).optString("error") }.getOrDefault("")
     return code == "device_clock_out_of_sync" || code == "device_request_replayed"
+}
+
+internal fun invalidAgentSession(response: Response): Boolean {
+    if (response.code != 401) return false
+    val code = runCatching { JSONObject(response.peekBody(4096).string()).optString("error") }.getOrDefault("")
+    return AgentRequestException(response.code, code, "").invalidSession
 }
 
 private fun parseTimeMillis(value: String): Long =

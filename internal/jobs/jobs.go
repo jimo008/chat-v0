@@ -158,6 +158,7 @@ func (r *Runner) unreadBatchMessages(ctx context.Context, tx *sql.Tx, batchID ui
 		 JOIN conversations conv ON conv.id = m.conversation_id
 		 WHERE bm.batch_id = ?
 		   AND m.sender_type = 'agent'
+		   AND m.is_auto_reply = FALSE
 		   AND m.seq > conv.customer_last_seen_seq
 		   AND m.email_notified_at IS NULL
 		 ORDER BY m.created_at ASC, m.id ASC`,

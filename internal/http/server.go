@@ -36,6 +36,8 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /api/v1/admin/device-pairings", s.requireAdmin(http.HandlerFunc(s.adminPairingCode)))
 	mux.Handle("GET /api/v1/admin/security", s.requireAdmin(http.HandlerFunc(s.adminSecurityStatus)))
 	mux.Handle("PATCH /api/v1/admin/security", s.requireAdmin(http.HandlerFunc(s.adminSetSecurity)))
+	mux.Handle("GET /api/v1/admin/auto-reply", s.requireAdmin(http.HandlerFunc(s.autoReplyStatus)))
+	mux.Handle("PATCH /api/v1/admin/auto-reply", s.requireAdmin(http.HandlerFunc(s.setAutoReply)))
 	mux.Handle("POST /api/v1/admin/sites", s.requireAdmin(http.HandlerFunc(s.createSite)))
 	mux.Handle("GET /api/v1/admin/sites", s.requireAdmin(http.HandlerFunc(s.listSites)))
 	mux.Handle("PATCH /api/v1/admin/sites/{site_key}", s.requireAdmin(http.HandlerFunc(s.renameSite)))

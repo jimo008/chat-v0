@@ -43,6 +43,7 @@ func main() {
 	defer stop()
 
 	runner := jobs.NewRunner(cfg, db, logger)
+	go runner.RunAutoReplies(ctx)
 	logger.Info("support worker started")
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()

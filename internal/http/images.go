@@ -52,6 +52,10 @@ func (s *Server) customerUploadImage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "image_message_failed"})
 		return
 	}
+	if err := queueAutoReply(r.Context(), tx, message); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "auto_reply_schedule_failed"})
+		return
+	}
 	if _, _, err := createEvent(r.Context(), tx, customer.SiteID, "MESSAGE_CREATED", message); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "image_event_failed"})
 		return

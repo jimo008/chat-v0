@@ -23,6 +23,10 @@ Usage:
   ./supportctl security status
   ./supportctl security enable
   ./supportctl security disable
+  ./supportctl autoreply set
+  ./supportctl autoreply on
+  ./supportctl autoreply off
+  ./supportctl autoreply status
 
 V1 admin is CLI-first. Web admin is intentionally not included.
 USAGE
@@ -247,6 +251,35 @@ cmd_security() {
   echo
 }
 
+cmd_autoreply() {
+  require_env
+  case "${1:-status}" in
+    status) api_curl GET /api/v1/admin/auto-reply ;;
+    on) api_curl PATCH /api/v1/admin/auto-reply '{"enabled":true}' ;;
+    off) api_curl PATCH /api/v1/admin/auto-reply '{"enabled":false}' ;;
+    set)
+      if ! command -v python3 >/dev/null 2>&1; then
+        echo "python3 is required to encode multiline reply content." >&2
+        return 1
+      fi
+      local content="" line first=true
+      printf '请输入自动回复正文（可多行），单独输入 . 并回车保存：\n'
+      while IFS= read -r line; do
+        [[ "$line" == "." ]] && break
+        if [[ "$first" == true ]]; then content="$line"; first=false
+        else content+=$'\n'"$line"
+        fi
+      done
+      printf '%s' "$content" |
+        python3 -c 'import json,sys; print(json.dumps({"content":sys.stdin.read()},ensure_ascii=False))' |
+        curl -fsS -X PATCH "$(base_url)/api/v1/admin/auto-reply" \
+          -H "Authorization: Bearer $(admin_token)" -H "Content-Type: application/json" --data-binary @-
+      ;;
+    *) usage; return 1 ;;
+  esac
+  echo
+}
+
 main() {
   if [[ $# -lt 1 ]]; then
     usage
@@ -263,6 +296,7 @@ main() {
     backup) shift; cmd_backup "$@" ;;
     init-agent) shift; cmd_init_agent "$@" ;;
     security) shift; cmd_security "$@" ;;
+    autoreply) shift; cmd_autoreply "$@" ;;
     device)
       shift
       case "${1:-}" in

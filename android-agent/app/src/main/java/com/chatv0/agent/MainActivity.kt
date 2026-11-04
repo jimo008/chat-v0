@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -48,6 +49,7 @@ import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     private lateinit var prefs: AgentPrefs
+    private var notificationRequest by mutableStateOf(0L to 0L)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,26 +57,55 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1001)
         }
-        setContent { AgentApp(prefs) { ContextCompat.startForegroundService(this, Intent(this, AgentForegroundService::class.java)) } }
+        readNotificationIntent(intent)
+        setContent { AgentApp(prefs, notificationRequest) { ContextCompat.startForegroundService(this, Intent(this, AgentForegroundService::class.java)) } }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        readNotificationIntent(intent)
+    }
+
+    private fun readNotificationIntent(intent: Intent?) {
+        val id = intent?.getLongExtra(AgentForegroundService.EXTRA_CONVERSATION_ID, 0L) ?: 0L
+        if (id > 0) notificationRequest = id to (notificationRequest.second + 1)
+    }
+
+    private fun updateForeground(value: Boolean) {
+        val token = prefs.token
+        val server = prefs.baseUrl
+        lifecycleScope.launch(Dispatchers.IO) { runCatching { AgentApi(server, token).setForeground(value) } }
     }
 
     override fun onResume() {
         super.onResume()
         if (!prefs.isPairedFor(prefs.baseUrl) || prefs.token.isBlank()) return
         ContextCompat.startForegroundService(this, Intent(this, AgentForegroundService::class.java).setAction(AgentForegroundService.ACTION_STOP_RING))
-        runCatching { AgentApi(prefs.baseUrl, prefs.token).setForeground(true) }
+        updateForeground(true)
     }
 
     override fun onPause() {
-        if (prefs.isPairedFor(prefs.baseUrl) && prefs.token.isNotBlank()) runCatching { AgentApi(prefs.baseUrl, prefs.token).setForeground(false) }
+        if (prefs.isPairedFor(prefs.baseUrl) && prefs.token.isNotBlank()) updateForeground(false)
         super.onPause()
     }
 }
 
 @Composable
-fun AgentApp(prefs: AgentPrefs, onStartService: () -> Unit) {
+fun AgentApp(prefs: AgentPrefs, notificationRequest: Pair<Long, Long> = 0L to 0L, onStartService: () -> Unit) {
     var token by remember { mutableStateOf(if (prefs.isPairedFor(prefs.baseUrl)) prefs.token else "") }
     var selected by remember { mutableStateOf<CustomerItem?>(null) }
+    LaunchedEffect(notificationRequest, token) {
+        val conversationId = notificationRequest.first
+        val expectedToken = token
+        if (conversationId > 0 && expectedToken.isNotBlank()) {
+            selected = null
+            val api = AgentApi(prefs.baseUrl, expectedToken)
+            val cached = runCatching { api.parseCustomers(JSONObject(prefs.cachedCustomers())).firstOrNull { it.conversationId == conversationId } }.getOrNull()
+            val customer = cached ?: withContext(Dispatchers.IO) { runCatching { api.customers().firstOrNull { it.conversationId == conversationId } }.getOrNull() }
+            if (prefs.token == expectedToken) selected = customer
+        }
+    }
     LaunchedEffect(Unit) {
         while (true) {
             val current = if (prefs.isPairedFor(prefs.baseUrl)) prefs.token else ""
@@ -561,20 +592,7 @@ fun AttachmentImage(prefs: AgentPrefs, attachmentId: Long) {
                     .clickable { preview = true }
             )
             if (preview) {
-                Dialog(onDismissRequest = { preview = false }) {
-                    Surface(color = Color.Black.copy(alpha = 0.92f), shape = MaterialTheme.shapes.medium) {
-                        Image(
-                            bitmap!!.asImageBitmap(),
-                            contentDescription = "图片原图",
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .fillMaxHeight(0.86f)
-                                .padding(10.dp)
-                                .clickable { preview = false }
-                        )
-                    }
-                }
+                ZoomableImageDialog(bitmap!!) { preview = false }
             }
         }
         failed -> Text("[图片加载失败]")

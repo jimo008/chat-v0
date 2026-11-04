@@ -7,15 +7,20 @@ import android.media.RingtoneManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.net.Uri
+import android.os.Bundle
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import okhttp3.*
 import org.json.JSONObject
+import org.json.JSONArray
 import java.util.concurrent.TimeUnit
 
 class AgentForegroundService : Service() {
     companion object {
         const val ACTION_STOP_RING = "com.chatv0.agent.STOP_RING"
+        const val EXTRA_CONVERSATION_ID = "conversation_id"
         private const val WATCHDOG_REQUEST_CODE = 2001
         private const val WATCHDOG_INTERVAL_MS = 60_000L
         private const val NORMAL_CHANNEL_ID = "agent-popup-v3"
@@ -45,12 +50,10 @@ class AgentForegroundService : Service() {
     private lateinit var prefs: AgentPrefs
     private var webSocket: WebSocket? = null
     private var emergencyRingtone: Ringtone? = null
-    private var normalRingtone: Ringtone? = null
     private var syncJob: Job? = null
     private var reconnectJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var sessionToken = ""
-    private var lastNormalAlertAt = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -198,8 +201,7 @@ class AgentForegroundService : Service() {
         val json = runCatching { JSONObject(text) }.getOrNull() ?: return
         val events = json.optJSONArray("events") ?: return
         val cursor = EventCursor(prefs.lastSeq)
-        var normalContent: String? = null
-        var normalCount = 0
+        val alerts = loadAlerts()
         for (i in 0 until events.length()) {
             val event = events.getJSONObject(i)
             if (!cursor.accept(event.optLong("seq"))) continue
@@ -213,7 +215,7 @@ class AgentForegroundService : Service() {
                             "image" -> "[图片消息]"
                             else -> payload.optString("content")
                         }
-                        prefs.updateCachedCustomerPreview(conversationId, preview, if (payload.optString("sender_type") == "customer") 1 else 0, lastMessageAt = payload.optString("created_at"))
+                        prefs.updateCachedCustomerPreview(conversationId, preview, if (payload.optString("sender_type") == "customer" && event.optBoolean("notify", false)) 1 else 0, lastMessageAt = payload.optString("created_at"))
                     }
                     prefs.bumpCustomerListVersion()
                     if (payload?.optString("sender_type") == "customer") {
@@ -223,13 +225,11 @@ class AgentForegroundService : Service() {
                                 "image" -> "[图片消息]"
                                 else -> payload.optString("content").ifBlank { "新的客户消息" }
                             }
-                            prefs.markNotifiedMessage(messageId)
-                            normalContent = if (conversationId > 0) "#$conversationId $content" else content
-                            normalCount++
+                            alerts.offer(conversationId, messageId, payload.optLong("seq"), content)
                         }
                     }
                 }
-                "CUSTOMER_READ_UPDATED", "MESSAGE_READ" -> {
+                "CUSTOMER_READ_UPDATED", "MESSAGE_READ", "AGENT_READ_UPDATED" -> {
                     val payload = event.optJSONObject("payload") ?: event.optJSONObject("payload_json")
                     val conversationId = payload?.optLong("conversation_id", 0L) ?: 0L
                     val readState = payload?.optJSONObject("read_state")
@@ -237,10 +237,14 @@ class AgentForegroundService : Service() {
                         prefs.updateCachedConversationReadState(conversationId, readState)
                         prefs.bumpCustomerListVersion()
                     }
+                    if (event.optString("type") == "AGENT_READ_UPDATED" && conversationId > 0L) {
+                        val upTo = payload?.optLong("up_to_seq") ?: 0L
+                        alerts.read(conversationId, upTo)
+                        cancelReadNotification(conversationId, upTo)
+                    }
                 }
                 "EMERGENCY_STARTED" -> {
                     if (!event.optBoolean("notify", false)) {
-                        prefs.lastSeq = cursor.value
                         continue
                     }
                     val payload = event.optJSONObject("payload") ?: event.optJSONObject("payload_json")
@@ -259,15 +263,10 @@ class AgentForegroundService : Service() {
                     (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(3)
                 }
             }
-            prefs.lastSeq = cursor.value
         }
-        if (normalContent != null) {
-            val now = android.os.SystemClock.elapsedRealtime()
-            if (lastNormalAlertAt == 0L || now - lastNormalAlertAt >= 3000L) {
-                lastNormalAlertAt = now
-                notifyNormal(if (normalCount > 1) "$normalCount 条新消息：$normalContent" else normalContent!!)
-            }
-        }
+        prefs.saveNotificationProgress(cursor.value, encodeAlerts(alerts))
+        // Drain catch-up pages before alerting, so newer read receipts can silence old pending items.
+        if (events.length() < 100) flushAlerts(alerts)
     }
 
     private fun scheduleReconnect() {
@@ -278,8 +277,56 @@ class AgentForegroundService : Service() {
         }
     }
 
-    private fun notifyNormal(text: String) {
-        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(2, notification(NORMAL_CHANNEL_ID, text, ongoing = false, emergency = false, alert = true))
+    private fun loadAlerts(): CustomerAlerts = runCatching {
+        val array = JSONArray(prefs.pendingNotifications())
+        CustomerAlerts((0 until array.length()).map { i -> array.getJSONObject(i).let {
+            CustomerAlert(it.getLong("conversation_id"), it.getLong("message_id"), it.getLong("message_seq"), it.getString("text"), it.optInt("count", 1))
+        } })
+    }.getOrElse { CustomerAlerts() }
+
+    private fun encodeAlerts(alerts: CustomerAlerts): String = JSONArray().apply {
+        alerts.items().forEach { item -> put(JSONObject().apply {
+            put("conversation_id", item.conversationId); put("message_id", item.messageId)
+            put("message_seq", item.messageSeq); put("text", item.text); put("count", item.count)
+        }) }
+    }.toString()
+
+    private fun flushAlerts(alerts: CustomerAlerts) {
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        if (!manager.areNotificationsEnabled() || manager.getNotificationChannel(NORMAL_CHANNEL_ID)?.importance == NotificationManager.IMPORTANCE_NONE) return
+        for (item in alerts.items()) {
+            val lastRead = runCatching { JSONObject(prefs.cachedConversation(item.conversationId)).optJSONObject("read_state")?.optLong("agent_last_seen_seq") ?: 0L }.getOrDefault(0L)
+            if (item.messageSeq <= lastRead || prefs.hasNotifiedMessage(item.messageId)) {
+                alerts.delivered(item.conversationId)
+                prefs.saveNotificationProgress(prefs.lastSeq, encodeAlerts(alerts))
+                continue
+            }
+            val customer = runCatching {
+                val customers = JSONObject(prefs.cachedCustomers()).getJSONArray("customers")
+                (0 until customers.length()).map { customers.getJSONObject(it) }
+                    .firstOrNull { it.optLong("conversation_id") == item.conversationId }
+            }.getOrNull()
+            val title = customer?.optString("email").orEmpty().ifBlank { "客户 #${item.conversationId}" }
+            val count = maxOf(item.count, customer?.optInt("unread_count") ?: 0)
+            val text = if (count > 1) "$count 条未读消息：${item.text}" else item.text
+            val posted = runCatching {
+                manager.notify("customer:${item.conversationId}", 2, notification(NORMAL_CHANNEL_ID, text, false, alert = true,
+                    conversationId = item.conversationId, messageSeq = item.messageSeq, title = title, count = count))
+            }.onFailure { Log.w("AgentNotifications", "Unable to post message notification", it) }.isSuccess
+            if (!posted) continue
+            alerts.delivered(item.conversationId)
+            prefs.markNotifiedMessage(item.messageId, encodeAlerts(alerts))
+        }
+    }
+
+    private fun cancelReadNotification(conversationId: Long, upToSeq: Long) {
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        val tag = "customer:$conversationId"
+        runCatching {
+            for (active in manager.activeNotifications) {
+                if (active.tag == tag && active.notification.extras.getLong("message_seq") <= upToSeq) manager.cancel(tag, 2)
+            }
+        }.onFailure { Log.w("AgentNotifications", "Unable to cancel read notification", it) }
     }
 
     private fun notifyEmergency(text: String) {
@@ -287,27 +334,32 @@ class AgentForegroundService : Service() {
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(3, notification(EMERGENCY_CHANNEL_ID, text, ongoing = false, emergency = true))
     }
 
-    private fun notification(channelId: String = "agent", text: String, ongoing: Boolean, emergency: Boolean = false, alert: Boolean = false): Notification {
-        val intent = Intent(this, MainActivity::class.java)
+    private fun notification(channelId: String = "agent", text: String, ongoing: Boolean, emergency: Boolean = false, alert: Boolean = false,
+        conversationId: Long = 0, messageSeq: Long = 0, title: String = "Chat V0 客服", count: Int = 0): Notification {
+        val intent = Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        if (conversationId > 0) intent.putExtra(EXTRA_CONVERSATION_ID, conversationId).setData(Uri.parse("chatv0://conversation/$conversationId"))
         val pendingIntent = PendingIntent.getActivity(
             this,
-            if (emergency) 3 else 2,
+            if (conversationId > 0) conversationId.hashCode() else if (emergency) 3 else 2,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val builder = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(android.R.drawable.sym_call_incoming)
-            .setContentTitle(if (emergency) "紧急客服呼叫" else "Chat V0 客服")
+            .setContentTitle(if (emergency) "紧急客服呼叫" else title)
             .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setNumber(count)
+            .addExtras(Bundle().apply { putLong("message_seq", messageSeq) })
             .setContentIntent(pendingIntent)
             .setOngoing(ongoing)
             .setAutoCancel(!ongoing)
-            .setCategory(if (emergency || alert) NotificationCompat.CATEGORY_CALL else NotificationCompat.CATEGORY_MESSAGE)
+            .setCategory(if (emergency) NotificationCompat.CATEGORY_CALL else NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(if (emergency || alert) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_HIGH)
             .setVibrate(if (emergency) longArrayOf(0, 700, 300, 700, 300, 700) else longArrayOf(0, 200, 100, 200))
             .setDefaults(Notification.DEFAULT_ALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-        if (emergency || alert) builder.setTimeoutAfter(if (emergency) 60000 else 15000)
+        if (emergency) builder.setTimeoutAfter(60000)
         return builder.build()
     }
 
@@ -349,13 +401,4 @@ class AgentForegroundService : Service() {
         emergencyRingtone = null
     }
 
-    private fun playNormalRing() {
-        normalRingtone?.stop()
-        normalRingtone = RingtoneManager.getRingtone(this, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))?.also { it.play() }
-        scope.launch {
-            delay(3000)
-            normalRingtone?.stop()
-            normalRingtone = null
-        }
-    }
 }

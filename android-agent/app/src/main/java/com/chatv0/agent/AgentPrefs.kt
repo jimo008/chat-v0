@@ -50,6 +50,7 @@ class AgentPrefs(context: Context) {
         }
         editor.putString("sync_identity", identity).putString("base_url", url)
             .putString("login", username).putString("token", newToken)
+            .remove("pending_notifications")
             .putBoolean("sync_initialized_v2", false).commit()
     }
 
@@ -67,6 +68,12 @@ class AgentPrefs(context: Context) {
 
     fun inSession(expected: String, action: () -> Unit) = synchronized(sessionLock) {
         if (expected.isNotBlank() && token == expected) action()
+    }
+
+    fun pendingNotifications(): String = prefs.getString("pending_notifications", "[]") ?: "[]"
+
+    fun saveNotificationProgress(sequence: Long, pending: String) {
+        prefs.edit().putLong("last_seq", sequence).putString("pending_notifications", pending).commit()
     }
 
     var acceptEmergency: Boolean
@@ -207,7 +214,7 @@ class AgentPrefs(context: Context) {
         return prefs.getStringSet("notified_message_ids", emptySet()).orEmpty().contains(messageId.toString())
     }
 
-    fun markNotifiedMessage(messageId: Long) {
+    fun markNotifiedMessage(messageId: Long, pending: String? = null) {
         if (messageId <= 0L) return
         val existing = prefs.getStringSet("notified_message_ids", emptySet()).orEmpty()
         val next = (existing + messageId.toString())
@@ -216,7 +223,9 @@ class AgentPrefs(context: Context) {
             .take(300)
             .map { it.toString() }
             .toSet()
-        prefs.edit().putStringSet("notified_message_ids", next).apply()
+        val editor = prefs.edit().putStringSet("notified_message_ids", next)
+        if (pending != null) editor.putString("pending_notifications", pending)
+        editor.commit()
     }
 
     fun clearAuth() = synchronized(sessionLock) {

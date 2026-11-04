@@ -39,7 +39,7 @@ func TestAutoReplyIntegration(t *testing.T) {
 	if err := migrations.Run(context.Background(), db, "../../migrations"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE auto_reply_settings SET enabled = FALSE, content = '', generation = generation + 1 WHERE id = 1`); err != nil {
+	if _, err := db.Exec(`UPDATE auto_reply_settings SET enabled = FALSE, content = '', generation = generation + 1, cooldown_seconds = 60 WHERE id = 1`); err != nil {
 		t.Fatal(err)
 	}
 	defer db.Exec(`UPDATE auto_reply_settings SET enabled = FALSE, generation = generation + 1 WHERE id = 1`)
@@ -259,6 +259,34 @@ func TestAutoReplyIntegration(t *testing.T) {
 	process()
 	if countAuto() != 4 {
 		t.Fatal("customer images should trigger a reply")
+	}
+	result := admin("PATCH", map[string]any{"cooldown_minutes": 20}, 200)
+	if result["cooldown_seconds"] != float64(1200) || result["cooldown_minutes"] != float64(20) || result["enabled"] != true || result["content"] != "修改后的正文" {
+		t.Fatal("changing the cooldown must preserve content and enabled state")
+	}
+	for _, invalid := range []int{0, -1, 1441} {
+		admin("PATCH", map[string]any{"cooldown_minutes": invalid}, 400)
+	}
+	if result := admin("GET", nil, 200); result["cooldown_seconds"] != float64(1200) {
+		t.Fatal("invalid updates must leave the previous value intact")
+	}
+	update(`UPDATE auto_reply_state SET last_sent_at = NOW(3) - INTERVAL 19 MINUTE WHERE conversation_id = ?`, conversationID)
+	send(false, "19 minutes is still in cooldown", "")
+	due()
+	process()
+	if countAuto() != 4 || countPending() != 0 {
+		t.Fatal("20 minute setting must suppress messages after 19 minutes")
+	}
+	update(`UPDATE auto_reply_state SET last_sent_at = NOW(3) - INTERVAL 21 MINUTE WHERE conversation_id = ?`, conversationID)
+	process()
+	if countAuto() != 4 {
+		t.Fatal("20 minute expiry must not send without a new message")
+	}
+	send(false, "new message after 21 minutes", "")
+	due()
+	process()
+	if countAuto() != 5 {
+		t.Fatal("a new message after 20 minute cooldown must trigger")
 	}
 	// Even an accidentally linked automatic message must be excluded by the email worker.
 	batchID := execID(`INSERT INTO email_batches (site_id, customer_id, conversation_id, send_after) VALUES (?, ?, ?, NOW(3))`, siteID, customerID, conversationID)

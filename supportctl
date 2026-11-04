@@ -27,6 +27,7 @@ Usage:
   ./supportctl autoreply on
   ./supportctl autoreply off
   ./supportctl autoreply status
+  ./supportctl autoreply cooldown <minutes>
 
 V1 admin is CLI-first. Web admin is intentionally not included.
 USAGE
@@ -257,6 +258,14 @@ cmd_autoreply() {
     status) api_curl GET /api/v1/admin/auto-reply ;;
     on) api_curl PATCH /api/v1/admin/auto-reply '{"enabled":true}' ;;
     off) api_curl PATCH /api/v1/admin/auto-reply '{"enabled":false}' ;;
+    cooldown)
+      local minutes="${2:-}"
+      if [[ ! "$minutes" =~ ^[1-9][0-9]{0,3}$ ]] || (( minutes > 1440 )); then
+        echo "Usage: ./supportctl autoreply cooldown <1-1440 minutes>" >&2
+        return 1
+      fi
+      api_curl PATCH /api/v1/admin/auto-reply "{\"cooldown_minutes\":$minutes}"
+      ;;
     set)
       if ! command -v python3 >/dev/null 2>&1; then
         echo "python3 is required to encode multiline reply content." >&2

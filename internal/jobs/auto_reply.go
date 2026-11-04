@@ -50,8 +50,9 @@ func (r *Runner) processOneAutoReply(ctx context.Context) (bool, error) {
 	var enabled bool
 	var content string
 	var generation uint64
+	var cooldownSeconds int
 	// Serialize shutdown/content changes with dispatch, without blocking customer writes.
-	if err := tx.QueryRowContext(ctx, `SELECT enabled, content, generation FROM auto_reply_settings WHERE id = 1 FOR SHARE`).Scan(&enabled, &content, &generation); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT enabled, content, generation, cooldown_seconds FROM auto_reply_settings WHERE id = 1 FOR SHARE`).Scan(&enabled, &content, &generation, &cooldownSeconds); err != nil {
 		return false, err
 	}
 	var job struct {
@@ -83,7 +84,7 @@ func (r *Runner) processOneAutoReply(ctx context.Context) (bool, error) {
 	if err := tx.QueryRowContext(ctx, `SELECT last_sent_at FROM auto_reply_state WHERE conversation_id = ? FOR UPDATE`, job.conversationID).Scan(&lastSent); err != nil {
 		return false, err
 	}
-	if lastSent.Valid && job.triggeredAt.Before(lastSent.Time.Add(time.Minute)) {
+	if lastSent.Valid && job.triggeredAt.Before(lastSent.Time.Add(time.Duration(cooldownSeconds)*time.Second)) {
 		return finish()
 	}
 

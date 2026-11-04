@@ -7,6 +7,7 @@ new settings and can be closed while the worker handles replies.
 cd /root/chat-v0
 ./supportctl autoreply set
 ./supportctl autoreply on
+./supportctl autoreply cooldown 20
 ./supportctl autoreply status
 ./supportctl autoreply off
 ```
@@ -22,8 +23,13 @@ after a blank line:
 Only newly submitted customer text and image messages schedule replies.
 Opening a page, replaying historical messages, calls, or automatic messages do
 not schedule replies. Dispatch waits at least three seconds. Messages received
-within a conversation's one-minute cooldown are discarded, not queued for later
+within a conversation's cooldown are discarded, not queued for later
 delivery. The cooldown starts when an automatic message is actually sent.
+It defaults to one minute; `./supportctl autoreply cooldown 20` changes it to
+20 minutes. The supported range is 1-1440 whole minutes. Changes apply immediately
+and preserve the body, enabled state, and last-send timestamps. This is not a
+periodic timer: without a new incoming message, expiry sends nothing. The
+initial three-second delay does not change.
 Human replies sent after the triggering customer message cancel that pending
 reply. Marking a message read without replying does not cancel it.
 

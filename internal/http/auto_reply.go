@@ -14,21 +14,27 @@ const autoReplyFooter = "此条消息由系统自动回复，有问题请留言�
 func (s *Server) autoReplyStatus(w http.ResponseWriter, r *http.Request) {
 	var enabled bool
 	var content string
-	if err := s.db.QueryRowContext(r.Context(), `SELECT enabled, content FROM auto_reply_settings WHERE id = 1`).Scan(&enabled, &content); err != nil {
+	var cooldownSeconds int
+	if err := s.db.QueryRowContext(r.Context(), `SELECT enabled, content, cooldown_seconds FROM auto_reply_settings WHERE id = 1`).Scan(&enabled, &content, &cooldownSeconds); err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "auto_reply_settings_unavailable"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"enabled": enabled, "content": content, "delay_seconds": 3, "cooldown_seconds": 60, "footer": autoReplyFooter})
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": enabled, "content": content, "delay_seconds": 3, "cooldown_seconds": cooldownSeconds, "cooldown_minutes": cooldownSeconds / 60, "footer": autoReplyFooter})
 }
 
 func (s *Server) setAutoReply(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Enabled *bool   `json:"enabled"`
-		Content *string `json:"content"`
+		Enabled         *bool   `json:"enabled"`
+		Content         *string `json:"content"`
+		CooldownMinutes *int    `json:"cooldown_minutes"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
-	if json.NewDecoder(r.Body).Decode(&req) != nil || (req.Enabled == nil && req.Content == nil) {
+	if json.NewDecoder(r.Body).Decode(&req) != nil || (req.Enabled == nil && req.Content == nil && req.CooldownMinutes == nil) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_auto_reply_settings"})
+		return
+	}
+	if req.CooldownMinutes != nil && (*req.CooldownMinutes < 1 || *req.CooldownMinutes > 1440) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "auto_reply_cooldown_minutes_1_to_1440"})
 		return
 	}
 	if req.Content != nil {
@@ -48,12 +54,16 @@ func (s *Server) setAutoReply(w http.ResponseWriter, r *http.Request) {
 	var enabled bool
 	var content string
 	var generation uint64
-	if err := tx.QueryRowContext(r.Context(), `SELECT enabled, content, generation FROM auto_reply_settings WHERE id = 1 FOR UPDATE`).Scan(&enabled, &content, &generation); err != nil {
+	var cooldownSeconds int
+	if err := tx.QueryRowContext(r.Context(), `SELECT enabled, content, generation, cooldown_seconds FROM auto_reply_settings WHERE id = 1 FOR UPDATE`).Scan(&enabled, &content, &generation, &cooldownSeconds); err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "auto_reply_settings_unavailable"})
 		return
 	}
 	if req.Content != nil {
 		content = *req.Content
+	}
+	if req.CooldownMinutes != nil {
+		cooldownSeconds = *req.CooldownMinutes * 60
 	}
 	if req.Enabled != nil && *req.Enabled != enabled {
 		generation++
@@ -63,7 +73,7 @@ func (s *Server) setAutoReply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "set_auto_reply_content_before_enabling"})
 		return
 	}
-	if _, err := tx.ExecContext(r.Context(), `UPDATE auto_reply_settings SET enabled = ?, content = ?, generation = ? WHERE id = 1`, enabled, content, generation); err != nil {
+	if _, err := tx.ExecContext(r.Context(), `UPDATE auto_reply_settings SET enabled = ?, content = ?, generation = ?, cooldown_seconds = ? WHERE id = 1`, enabled, content, generation, cooldownSeconds); err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "auto_reply_update_failed"})
 		return
 	}

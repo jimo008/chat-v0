@@ -19,8 +19,8 @@ const i = args.indexOf('--data');
 const raw = args.includes('--data-binary') ? fs.readFileSync(0, 'utf8') : (i >= 0 ? args[i + 1] : '{}');
 process.stdout.write(JSON.stringify({args, data:JSON.parse(raw)}));
 `, { mode: 0o700 });
-  return (mode, input = '') => {
-    const result = spawnSync('bash', [path.join(dir, 'supportctl'), 'autoreply', mode], {
+  return (mode, input = '', ...args) => {
+    const result = spawnSync('bash', [path.join(dir, 'supportctl'), 'autoreply', mode, ...args], {
       input, encoding: 'utf8', env: { ...process.env, PATH: [bin, path.dirname(process.execPath), process.env.PATH].join(path.delimiter) },
     });
     assert.equal(result.status, 0, result.stderr);
@@ -45,4 +45,9 @@ test('on and off only change the enabled flag, preserving the configured body', 
   assert.deepEqual(run('on').data, { enabled: true });
   assert.deepEqual(run('off').data, { enabled: false });
   assert.ok(run('status').args.includes('GET'));
+});
+
+test('cooldown takes whole minutes without changing content or the enabled flag', (t) => {
+  const run = fixture(t);
+  assert.deepEqual(run('cooldown', '', '20').data, { cooldown_minutes: 20 });
 });

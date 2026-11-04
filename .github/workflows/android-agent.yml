@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,6 +48,29 @@ jobs:
           ANDROID_RELEASE_KEYSTORE: ${{ runner.temp }}/chat-v0-release.p12
           ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
         run: gradle :android-agent:app:testReleaseUnitTest :android-agent:app:assembleRelease
+
+      - name: Enable emulator acceleration
+        run: sudo chmod 666 /dev/kvm
+
+      - name: Test image viewer on Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash android-agent/scripts/test-image-viewer.sh
+
+      - name: Upload image viewer test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-viewer-ui-tests
+          path: |
+            image-viewer-ui-tests/
+            android-agent/app/build/outputs/androidTest-results/
+            android-agent/app/build/reports/androidTests/
 
       - name: Prepare latest APK
         run: |

@@ -12,8 +12,9 @@ android {
         applicationId = "com.chatv0.agent"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20261104
-        versionName = "0.2.3"
+        versionCode = 20261105
+        versionName = "0.2.4"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -45,6 +46,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.compose.material3:material3:1.3.1")
+    implementation("androidx.compose.material:material-icons-core:1.7.6")
     implementation("androidx.compose.ui:ui:1.7.6")
     implementation("androidx.compose.ui:ui-tooling-preview:1.7.6")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
@@ -53,4 +55,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     debugImplementation("androidx.compose.ui:ui-tooling:1.7.6")
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.7.6")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    debugImplementation("androidx.compose.ui:ui-test-manifest:1.7.6")
 }

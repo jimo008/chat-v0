@@ -52,7 +52,7 @@ jobs:
       - name: Enable emulator acceleration
         run: sudo chmod 666 /dev/kvm
 
-      - name: Test image viewer on Android emulator
+      - name: Test image viewer and cached customer list on Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 29

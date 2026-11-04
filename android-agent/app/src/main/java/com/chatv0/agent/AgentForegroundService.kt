@@ -54,6 +54,8 @@ class AgentForegroundService : Service() {
     private var reconnectJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var sessionToken = ""
+    @Volatile private var customerRefreshNeeded = true
+    private var nextCustomerRefreshAt = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -81,6 +83,8 @@ class AgentForegroundService : Service() {
             reconnectJob?.cancel()
             webSocket?.cancel()
             webSocket = null
+            customerRefreshNeeded = true
+            nextCustomerRefreshAt = 0L
         }
         if (syncJob?.isActive != true) {
             syncJob = scope.launch {
@@ -165,7 +169,9 @@ class AgentForegroundService : Service() {
                 val json = JSONObject(resp.body?.string().orEmpty())
                 if (!json.optBoolean("snapshot") || !json.has("latest_seq")) return@use false
                 val customers = AgentApi(baseUrl, token).customersJson()
-                prefs.completeSnapshot(token, json.getLong("latest_seq"), customers.toString())
+                prefs.completeSnapshot(token, json.getLong("latest_seq"), customers.toString()).also { complete ->
+                    if (complete) customerRefreshNeeded = false
+                }
             }
         }.getOrDefault(false)
     }
@@ -189,6 +195,22 @@ class AgentForegroundService : Service() {
                     if (resp.isSuccessful) handleEventEnvelope(resp.body?.string().orEmpty(), token)
                 }
             }
+            refreshMissingCustomers(baseUrl, token)
+        }
+    }
+
+    private fun refreshMissingCustomers(baseUrl: String, token: String) {
+        if (!customerRefreshNeeded || android.os.SystemClock.elapsedRealtime() < nextCustomerRefreshAt) return
+        customerRefreshNeeded = false
+        nextCustomerRefreshAt = android.os.SystemClock.elapsedRealtime() + 3000
+        val previous = prefs.cachedCustomers()
+        runCatching {
+            val json = AgentApi(baseUrl, token).customersJson().toString()
+            // Do not overwrite a newer message/read event while filling a newly discovered customer.
+            if (!prefs.replaceCustomerSnapshot(token, previous, json)) customerRefreshNeeded = true
+        }.onFailure {
+            customerRefreshNeeded = true
+            if (it is AgentRequestException && it.invalidSession) prefs.clearAuthIfToken(it.requestToken)
         }
     }
 
@@ -215,7 +237,13 @@ class AgentForegroundService : Service() {
                             "image" -> "[图片消息]"
                             else -> payload.optString("content")
                         }
-                        prefs.updateCachedCustomerPreview(conversationId, preview, if (payload.optString("sender_type") == "customer" && event.optBoolean("notify", false)) 1 else 0, lastMessageAt = payload.optString("created_at"))
+                        val incoming = payload.optString("sender_type") == "customer"
+                        val found = prefs.updateCachedCustomerPreview(conversationId, preview,
+                            if (incoming && event.optBoolean("notify", false)) 1 else 0,
+                            lastMessageAt = payload.optString("created_at"),
+                            customerMessageSeq = if (incoming) payload.optLong("seq") else 0L,
+                            messageSeq = payload.optLong("seq"))
+                        if (!found) customerRefreshNeeded = true
                     }
                     prefs.bumpCustomerListVersion()
                     if (payload?.optString("sender_type") == "customer") {
@@ -239,6 +267,7 @@ class AgentForegroundService : Service() {
                     }
                     if (event.optString("type") == "AGENT_READ_UPDATED" && conversationId > 0L) {
                         val upTo = payload?.optLong("up_to_seq") ?: 0L
+                        prefs.markCachedCustomerRead(conversationId, upTo)
                         alerts.read(conversationId, upTo)
                         cancelReadNotification(conversationId, upTo)
                     }

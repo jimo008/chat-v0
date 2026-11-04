@@ -1,6 +1,11 @@
 package com.chatv0.agent
 
 import android.content.Context
+import android.content.SharedPreferences
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.distinctUntilChanged
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -93,15 +98,31 @@ class AgentPrefs(context: Context) {
             return generated
         }
 
-    fun bumpCustomerListVersion() {
+    fun bumpCustomerListVersion() = synchronized(sessionLock) {
         prefs.edit().putLong("customer_list_version", customerListVersion + 1).apply()
     }
 
     fun cachedCustomers(): String =
         prefs.getString("customers_json", "") ?: ""
 
-    fun setCachedCustomers(json: String) {
-        prefs.edit().putString("customers_json", json).apply()
+    fun setCachedCustomers(json: String): Unit = synchronized(sessionLock) {
+        if (cachedCustomers() != json) prefs.edit().putString("customers_json", json).apply()
+        Unit
+    }
+
+    fun customerCacheChanges() = callbackFlow {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "customers_json") trySend(cachedCustomers())
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        trySend(cachedCustomers())
+        awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }.conflate().distinctUntilChanged()
+
+    fun replaceCustomerSnapshot(expectedToken: String, previous: String, json: String): Boolean = synchronized(sessionLock) {
+        if (expectedToken.isBlank() || token != expectedToken || cachedCustomers() != previous) return@synchronized false
+        setCachedCustomers(json)
+        true
     }
 
     fun cachedConversation(conversationId: Long): String =
@@ -135,42 +156,52 @@ class AgentPrefs(context: Context) {
         }
     }
 
-    fun updateCachedCustomerPreview(conversationId: Long, lastMessage: String, unreadDelta: Int = 0, ringingDelta: Int = 0, lastMessageAt: String = nowIso()) {
+    fun updateCachedCustomerPreview(conversationId: Long, lastMessage: String, unreadDelta: Int = 0, ringingDelta: Int = 0, lastMessageAt: String = nowIso(), customerMessageSeq: Long = 0, messageSeq: Long = 0): Boolean = synchronized(sessionLock) {
         val raw = cachedCustomers()
-        if (raw.isBlank()) return
+        if (raw.isBlank()) return@synchronized false
         runCatching {
             val root = JSONObject(raw)
-            val arr = root.optJSONArray("customers") ?: return
+            val arr = root.optJSONArray("customers") ?: return@runCatching false
             var updated: JSONObject? = null
             val next = JSONArray()
             for (i in 0 until arr.length()) {
                 val item = arr.getJSONObject(i)
                 if (item.optLong("conversation_id") == conversationId) {
+                    if (messageSeq > 0) {
+                        val cachedSeq = item.optLong("last_message_seq")
+                        val alreadyInSnapshot = cachedSeq == 0L && runCatching {
+                            !java.time.OffsetDateTime.parse(lastMessageAt).toInstant()
+                                .isAfter(java.time.OffsetDateTime.parse(item.optString("last_message_at")).toInstant())
+                        }.getOrDefault(false)
+                        if (messageSeq <= cachedSeq || alreadyInSnapshot) return@runCatching true
+                        item.put("last_message_seq", messageSeq)
+                    }
                     if (lastMessage.isNotBlank()) item.put("last_message", lastMessage)
                     if (lastMessageAt.isNotBlank()) item.put("last_message_at", lastMessageAt)
                     if (unreadDelta != 0) item.put("unread_count", (item.optInt("unread_count") + unreadDelta).coerceAtLeast(0))
                     if (ringingDelta != 0) item.put("ringing_count", (item.optInt("ringing_count") + ringingDelta).coerceAtLeast(0))
+                    if (customerMessageSeq > 0) item.put("last_customer_message_seq", maxOf(item.optLong("last_customer_message_seq"), customerMessageSeq))
                     updated = item
                 } else {
                     next.put(item)
                 }
             }
-            if (updated != null) {
-                val sorted = JSONArray()
-                sorted.put(updated)
-                for (i in 0 until next.length()) sorted.put(next.getJSONObject(i))
-                root.put("customers", sorted)
-            }
+            if (updated == null) return@runCatching false
+            val sorted = JSONArray()
+            sorted.put(updated)
+            for (i in 0 until next.length()) sorted.put(next.getJSONObject(i))
+            root.put("customers", sorted)
             setCachedCustomers(root.toString())
-        }
+            true
+        }.getOrDefault(false)
     }
 
-    fun setCachedCustomerRinging(conversationId: Long, ringingCount: Int) {
+    fun setCachedCustomerRinging(conversationId: Long, ringingCount: Int): Unit = synchronized(sessionLock) {
         val raw = cachedCustomers()
-        if (raw.isBlank()) return
+        if (raw.isBlank()) return@synchronized
         runCatching {
             val root = JSONObject(raw)
-            val arr = root.optJSONArray("customers") ?: return
+            val arr = root.optJSONArray("customers") ?: return@runCatching
             for (i in 0 until arr.length()) {
                 val item = arr.getJSONObject(i)
                 if (item.optLong("conversation_id") == conversationId) {
@@ -180,23 +211,26 @@ class AgentPrefs(context: Context) {
             }
             setCachedCustomers(root.toString())
         }
+        Unit
     }
 
-    fun markCachedCustomerRead(conversationId: Long) {
+    fun markCachedCustomerRead(conversationId: Long, upToSeq: Long = Long.MAX_VALUE): Unit = synchronized(sessionLock) {
         val raw = cachedCustomers()
-        if (raw.isBlank()) return
+        if (raw.isBlank()) return@synchronized
         runCatching {
             val root = JSONObject(raw)
-            val arr = root.optJSONArray("customers") ?: return
+            val arr = root.optJSONArray("customers") ?: return@runCatching
             for (i in 0 until arr.length()) {
                 val item = arr.getJSONObject(i)
                 if (item.optLong("conversation_id") == conversationId) {
+                    if (item.optLong("last_customer_message_seq") > upToSeq) return@runCatching
                     item.put("unread_count", 0)
                     break
                 }
             }
             setCachedCustomers(root.toString())
         }
+        Unit
     }
 
     fun updateCachedConversationReadState(conversationId: Long, readState: JSONObject) {

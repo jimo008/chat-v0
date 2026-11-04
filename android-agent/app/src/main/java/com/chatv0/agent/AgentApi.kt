@@ -40,23 +40,7 @@ class AgentApi(private val baseUrl: String, private val token: String = "") {
 
     fun isUnauthorized(error: Throwable): Boolean = error is AgentRequestException && error.invalidSession
 
-    fun parseCustomers(root: JSONObject): List<CustomerItem> {
-        val arr = root.optJSONArray("customers") ?: JSONArray()
-        return (0 until arr.length()).map { i ->
-            val o = arr.getJSONObject(i)
-            CustomerItem(
-                o.getLong("id"),
-                o.optString("site_name"),
-                o.optString("email"),
-                o.getLong("conversation_id"),
-                o.optBoolean("blocked"),
-                o.optInt("unread_count"),
-                o.optInt("ringing_count"),
-                o.optString("last_message"),
-                o.optString("last_message_at")
-            )
-        }.sortedWith(compareByDescending<CustomerItem> { if (it.ringingCount > 0) 1 else 0 }.thenByDescending { parseTimeMillis(it.lastMessageAt) })
-    }
+    fun parseCustomers(root: JSONObject): List<CustomerItem> = parseCustomerItems(root)
 
     fun conversation(id: Long): ConversationDetail {
         return parseConversation(conversationJson(id))
@@ -209,6 +193,17 @@ internal fun invalidAgentSession(response: Response): Boolean {
     if (response.code != 401) return false
     val code = runCatching { JSONObject(response.peekBody(4096).string()).optString("error") }.getOrDefault("")
     return AgentRequestException(response.code, code, "").invalidSession
+}
+
+internal fun parseCustomerItems(root: JSONObject): List<CustomerItem> {
+    val arr = root.optJSONArray("customers") ?: JSONArray()
+    return (0 until arr.length()).map { i ->
+        val o = arr.getJSONObject(i)
+        CustomerItem(o.getLong("id"), o.optString("site_name"), o.optString("email"),
+            o.getLong("conversation_id"), o.optBoolean("blocked"), o.optInt("unread_count"),
+            o.optInt("ringing_count"), o.optString("last_message"), o.optString("last_message_at"))
+    }.sortedWith(compareByDescending<CustomerItem> { if (it.ringingCount > 0) 1 else 0 }
+        .thenByDescending { parseTimeMillis(it.lastMessageAt) })
 }
 
 private fun parseTimeMillis(value: String): Long =

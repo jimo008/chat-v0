@@ -17,6 +17,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -30,6 +31,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
@@ -44,7 +46,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.time.OffsetDateTime
-import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 class MainActivity : ComponentActivity() {
@@ -116,10 +117,21 @@ fun AgentApp(prefs: AgentPrefs, notificationRequest: Pair<Long, Long> = 0L to 0L
     MaterialTheme {
         if (token.isBlank()) {
             LoginScreen(prefs) { newToken -> token = newToken; onStartService() }
-        } else if (selected == null) {
-            CustomerListScreen(prefs, onLogout = { prefs.clearAuth(); token = "" }, onSelect = { selected = it }, onStartService = onStartService, onAuthExpired = { expected -> if (prefs.clearAuthIfToken(expected)) token = "" })
         } else {
-            ConversationScreen(prefs, selected!!, onBack = { selected = null })
+            key(token) {
+                val list = rememberCustomerListState(prefs, token, onStartService) { expected ->
+                    if (prefs.clearAuthIfToken(expected)) token = ""
+                }
+                val listScroll = rememberLazyListState()
+                val scope = rememberCoroutineScope()
+                if (selected == null) {
+                    CustomerListScreen(prefs, list, listScroll,
+                        onLogout = { prefs.clearAuth(); token = "" }, onSelect = { selected = it },
+                        onRefresh = { scope.launch { list.refresh(prefs, prefs.baseUrl, token) { expected -> if (prefs.clearAuthIfToken(expected)) token = "" } } })
+                } else {
+                    ConversationScreen(prefs, selected!!, onBack = { selected = null })
+                }
+            }
         }
     }
 }
@@ -170,101 +182,14 @@ fun LoginScreen(prefs: AgentPrefs, onLoggedIn: (String) -> Unit) {
 }
 
 @Composable
-fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (CustomerItem) -> Unit, onStartService: () -> Unit, onAuthExpired: (String) -> Unit) {
+fun CustomerListScreen(prefs: AgentPrefs, state: CustomerListState, listScroll: LazyListState, onLogout: () -> Unit, onSelect: (CustomerItem) -> Unit, onRefresh: () -> Unit) {
     val scope = rememberCoroutineScope()
-    var customers by remember { mutableStateOf<List<CustomerItem>>(emptyList()) }
-    var status by remember { mutableStateOf("加载中") }
-    var deviceStatus by remember { mutableStateOf("设备状态检查中") }
     var duty by remember { mutableStateOf(prefs.acceptEmergency) }
-    var seenListVersion by remember { mutableStateOf(prefs.customerListVersion) }
-
-    fun refreshDevices() {
-        scope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) { AgentApi(prefs.baseUrl, prefs.token).devicesJson() }
-            }.onSuccess { root ->
-                val arr = root.optJSONArray("devices")
-                if (arr == null || arr.length() == 0) {
-                    deviceStatus = "设备：无在线记录"
-                    return@onSuccess
-                }
-                var active = 0
-                var current = ""
-                val now = System.currentTimeMillis()
-                for (i in 0 until arr.length()) {
-                    val item = arr.getJSONObject(i)
-                    val lastSync = item.optString("last_sync_at")
-                    val age = syncAgeSeconds(lastSync, now)
-                    if (age in 0..10 || item.optBoolean("ws_connected")) active++
-                    if (item.optBoolean("is_current")) {
-                        current = "本机 ${item.optString("device_id").takeLast(12)} ${if (age >= 0) "${age}秒前" else "未同步"}"
-                    }
-                }
-                deviceStatus = "设备：${active}/${arr.length()} 活跃" + if (current.isBlank()) "" else " · $current"
-            }.onFailure {
-                if (it is AgentRequestException && it.invalidSession) onAuthExpired(it.requestToken)
-                deviceStatus = connectionErrorMessage(it)
-            }
-        }
-    }
-
-    fun refresh() {
-        scope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val api = AgentApi(prefs.baseUrl, prefs.token)
-                    val json = api.customersJson()
-                    prefs.setCachedCustomers(json.toString())
-                    api.parseCustomers(json)
-                }
-            }
-                .onSuccess { customers = it; seenListVersion = prefs.customerListVersion; status = "共 ${it.size} 个客户" }
-                .onFailure { status = it.message ?: "加载失败" }
-        }
-    }
-    LaunchedEffect(Unit) {
-        onStartService()
-        val authResult = withContext(Dispatchers.IO) {
-            runCatching { AgentApi(prefs.baseUrl, prefs.token).me() }
-        }
-        val authError = authResult.exceptionOrNull()
-        if (authError is AgentRequestException && authError.invalidSession) {
-            status = "登录已失效，请重新登录"
-            onAuthExpired(authError.requestToken)
-            return@LaunchedEffect
-        }
-        if (authError != null) status = connectionErrorMessage(authError)
-        val cached = prefs.cachedCustomers()
-        if (cached.isNotBlank()) {
-            runCatching { AgentApi(prefs.baseUrl, prefs.token).parseCustomers(JSONObject(cached)) }
-                .onSuccess { customers = it; status = "共 ${it.size} 个客户" }
-        }
-        while (true) {
-            val currentVersion = prefs.customerListVersion
-            if (currentVersion != seenListVersion || customers.isEmpty()) {
-                val latestCached = prefs.cachedCustomers()
-                if (latestCached.isNotBlank()) {
-                    runCatching { AgentApi(prefs.baseUrl, prefs.token).parseCustomers(JSONObject(latestCached)) }
-                        .onSuccess { customers = it; status = "共 ${it.size} 个客户"; seenListVersion = currentVersion }
-                }
-                refresh()
-                refreshDevices()
-            }
-            delay(1000)
-        }
-    }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(60000)
-            refresh()
-            refreshDevices()
-        }
-    }
 
     Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("客户列表", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-            Button(onClick = { refresh() }) { Text("刷新") }
+            Button(onClick = onRefresh, enabled = !state.refreshing) { Text(if (state.refreshing) "更新中…" else "刷新") }
             OutlinedButton(onClick = onLogout) { Text("退出") }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -275,11 +200,11 @@ fun CustomerListScreen(prefs: AgentPrefs, onLogout: () -> Unit, onSelect: (Custo
             })
         }
         PermissionButtons()
-        Text(status, style = MaterialTheme.typography.bodySmall)
-        Text(deviceStatus, style = MaterialTheme.typography.bodySmall, color = Color(0xFF475569))
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(customers) { c ->
-                Card(Modifier.fillMaxWidth().clickable { onSelect(c) }) {
+        Text(state.status, style = MaterialTheme.typography.bodySmall)
+        Text(state.deviceStatus, style = MaterialTheme.typography.bodySmall, color = Color(0xFF475569))
+        LazyColumn(Modifier.weight(1f).testTag("customer-list"), state = listScroll, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(state.customers, key = { it.conversationId }) { c ->
+                Card(Modifier.fillMaxWidth().testTag("customer-${c.conversationId}").clickable { onSelect(c) }) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text("[${c.siteName}] ${c.email}", fontWeight = FontWeight.SemiBold)
@@ -637,11 +562,6 @@ fun conversationCacheJson(detail: ConversationDetail, messages: List<ChatMessage
         }
     })
     return root.toString()
-}
-
-fun formatTime(value: String): String {
-    if (value.isBlank()) return "刚刚"
-    return runCatching { OffsetDateTime.parse(value).format(DateTimeFormatter.ofPattern("HH:mm")) }.getOrDefault(value.take(16))
 }
 
 fun syncAgeSeconds(value: String, nowMillis: Long = System.currentTimeMillis()): Long {

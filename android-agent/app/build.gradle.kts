@@ -12,8 +12,8 @@ android {
         applicationId = "com.chatv0.agent"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20261105
-        versionName = "0.2.4"
+        versionCode = 20261106
+        versionName = "0.2.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -58,5 +58,6 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.7.6")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     debugImplementation("androidx.compose.ui:ui-test-manifest:1.7.6")
 }

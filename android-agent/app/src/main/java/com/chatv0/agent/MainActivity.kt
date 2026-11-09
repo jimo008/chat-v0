@@ -31,6 +31,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -264,11 +265,13 @@ fun openFullScreenSettings(context: android.content.Context) {
 fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val windowInfo = LocalWindowInfo.current
     var detail by remember { mutableStateOf<ConversationDetail?>(null) }
     var localMessages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
     var input by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("加载中") }
     var loadingOlder by remember { mutableStateOf(false) }
+    var loadedConversation by remember { mutableStateOf(false) }
     var didInitialScroll by remember(customer.conversationId) { mutableStateOf(false) }
     var seenCacheVersion by remember(customer.conversationId) { mutableStateOf(prefs.customerListVersion) }
     val listState = rememberLazyListState()
@@ -301,10 +304,7 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
                     localMessages = merged
                     prefs.setCachedConversation(customer.conversationId, conversationCacheJson(latest, merged))
                     status = ""
-                    withContext(Dispatchers.IO) {
-                        runCatching { AgentApi(prefs.baseUrl, prefs.token).markRead(customer.conversationId) }
-                        prefs.markCachedCustomerRead(customer.conversationId)
-                    }
+                    loadedConversation = true
                 }
                 .onFailure { status = it.message ?: "加载失败" }
         }
@@ -363,6 +363,23 @@ fun ConversationScreen(prefs: AgentPrefs, customer: CustomerItem, onBack: () -> 
             .distinctUntilChanged()
             .filter { it }
             .collect { loadOlder() }
+    }
+    LaunchedEffect(customer.conversationId, windowInfo) {
+        val api = AgentApi(prefs.baseUrl, prefs.token)
+        var markedThrough: Long? = null
+        while (true) {
+            val showingLatest = localMessages.isEmpty() ||
+                listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index == localMessages.lastIndex
+            if (loadedConversation && windowInfo.isWindowFocused && showingLatest) {
+                val latestIncoming = localMessages.lastOrNull { it.senderType == "customer" }?.seq ?: 0L
+                val previous = markedThrough
+                if (previous == null || latestIncoming > maxOf(previous, detail?.agentLastSeenSeq ?: 0L)) {
+                    val confirmed = withContext(Dispatchers.IO) { runCatching { api.markRead(customer.conversationId) }.isSuccess }
+                    if (confirmed) markedThrough = latestIncoming
+                }
+            }
+            delay(1000)
+        }
     }
     val imageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult

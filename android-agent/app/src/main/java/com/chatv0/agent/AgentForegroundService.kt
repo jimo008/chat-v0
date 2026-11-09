@@ -7,6 +7,7 @@ import android.media.RingtoneManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
@@ -25,6 +26,7 @@ class AgentForegroundService : Service() {
         private const val WATCHDOG_INTERVAL_MS = 60_000L
         private const val NORMAL_CHANNEL_ID = "agent-popup-v3"
         private const val EMERGENCY_CHANNEL_ID = "emergency-v2"
+        private const val UNREAD_REMINDER_ID = 4
 
         fun scheduleWatchdog(context: android.content.Context) {
             val prefs = AgentPrefs(context)
@@ -54,6 +56,9 @@ class AgentForegroundService : Service() {
     private var reconnectJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var sessionToken = ""
+    private var reminderSyncToken = ""
+    private val reminderClock = UnreadReminderClock()
+    private var reminderConversationId = 0L
     @Volatile private var customerRefreshNeeded = true
     private var nextCustomerRefreshAt = 0L
 
@@ -66,6 +71,7 @@ class AgentForegroundService : Service() {
             scheduleWatchdog(this)
         }
         startForeground(1, notification(text = "客服服务正在运行", ongoing = true, alert = false))
+        scope.launch { unreadReminderLoop() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -100,11 +106,12 @@ class AgentForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        scope.cancel()
+        notificationManager().cancel(UNREAD_REMINDER_ID)
         webSocket?.close(1000, "service_destroy")
         stopEmergencyRing()
         if (::prefs.isInitialized && prefs.token.isNotBlank()) scheduleWatchdog(this)
         releaseWakeLock()
-        scope.cancel()
         super.onDestroy()
     }
 
@@ -215,10 +222,10 @@ class AgentForegroundService : Service() {
     }
 
     private fun handleEventEnvelope(text: String, token: String) {
-        prefs.inSession(token) { applyEventEnvelope(text) }
+        prefs.inSession(token) { applyEventEnvelope(text, token) }
     }
 
-    private fun applyEventEnvelope(text: String) {
+    private fun applyEventEnvelope(text: String, token: String) {
         if (!prefs.syncInitialized) return
         val json = runCatching { JSONObject(text) }.getOrNull() ?: return
         val events = json.optJSONArray("events") ?: return
@@ -295,7 +302,12 @@ class AgentForegroundService : Service() {
         }
         prefs.saveNotificationProgress(cursor.value, encodeAlerts(alerts))
         // Drain catch-up pages before alerting, so newer read receipts can silence old pending items.
-        if (events.length() < 100) flushAlerts(alerts)
+        if (events.length() < 100) {
+            flushAlerts(alerts)
+            reminderSyncToken = token
+        } else {
+            reminderSyncToken = ""
+        }
     }
 
     private fun scheduleReconnect() {
@@ -309,7 +321,8 @@ class AgentForegroundService : Service() {
     private fun loadAlerts(): CustomerAlerts = runCatching {
         val array = JSONArray(prefs.pendingNotifications())
         CustomerAlerts((0 until array.length()).map { i -> array.getJSONObject(i).let {
-            CustomerAlert(it.getLong("conversation_id"), it.getLong("message_id"), it.getLong("message_seq"), it.getString("text"), it.optInt("count", 1))
+            CustomerAlert(it.getLong("conversation_id"), it.getLong("message_id"), it.getLong("message_seq"),
+                it.getString("text"), it.optInt("count", 1), it.optBoolean("notified", false))
         } })
     }.getOrElse { CustomerAlerts() }
 
@@ -317,15 +330,21 @@ class AgentForegroundService : Service() {
         alerts.items().forEach { item -> put(JSONObject().apply {
             put("conversation_id", item.conversationId); put("message_id", item.messageId)
             put("message_seq", item.messageSeq); put("text", item.text); put("count", item.count)
+            put("notified", item.notified)
         }) }
     }.toString()
 
     private fun flushAlerts(alerts: CustomerAlerts) {
-        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        if (!manager.areNotificationsEnabled() || manager.getNotificationChannel(NORMAL_CHANNEL_ID)?.importance == NotificationManager.IMPORTANCE_NONE) return
-        for (item in alerts.items()) {
+        val manager = notificationManager()
+        if (!messageNotificationsEnabled(manager)) return
+        for (item in alerts.pending()) {
             val lastRead = runCatching { JSONObject(prefs.cachedConversation(item.conversationId)).optJSONObject("read_state")?.optLong("agent_last_seen_seq") ?: 0L }.getOrDefault(0L)
-            if (item.messageSeq <= lastRead || prefs.hasNotifiedMessage(item.messageId)) {
+            if (item.messageSeq <= lastRead) {
+                alerts.read(item.conversationId, lastRead)
+                prefs.saveNotificationProgress(prefs.lastSeq, encodeAlerts(alerts))
+                continue
+            }
+            if (prefs.hasNotifiedMessage(item.messageId)) {
                 alerts.delivered(item.conversationId)
                 prefs.saveNotificationProgress(prefs.lastSeq, encodeAlerts(alerts))
                 continue
@@ -346,6 +365,53 @@ class AgentForegroundService : Service() {
             alerts.delivered(item.conversationId)
             prefs.markNotifiedMessage(item.messageId, encodeAlerts(alerts))
         }
+    }
+
+    private fun notificationManager(): NotificationManager =
+        getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+
+    private fun messageNotificationsEnabled(manager: NotificationManager): Boolean =
+        manager.areNotificationsEnabled() &&
+            manager.getNotificationChannel(NORMAL_CHANNEL_ID)?.importance != NotificationManager.IMPORTANCE_NONE
+
+    private suspend fun unreadReminderLoop() {
+        while (currentCoroutineContext().isActive) {
+            val token = prefs.token
+            if (token.isBlank()) {
+                updateUnreadReminder(emptySet())
+            } else {
+                prefs.inSession(token) {
+                    if (prefs.acceptEmergency && prefs.syncInitialized && reminderSyncToken == token) {
+                        val unread = loadAlerts().items().sortedByDescending { it.messageSeq }
+                            .mapTo(linkedSetOf()) { it.conversationId }
+                        // The snapshot includes unread messages from before this device began syncing.
+                        val cached = runCatching { parseCustomerItems(JSONObject(prefs.cachedCustomers())) }.getOrDefault(emptyList())
+                        cached.filter { it.unreadCount > 0 }.forEach { unread.add(it.conversationId) }
+                        updateUnreadReminder(unread)
+                    } else {
+                        updateUnreadReminder(emptySet())
+                    }
+                }
+            }
+            delay(1000)
+        }
+    }
+
+    private fun updateUnreadReminder(unread: Set<Long>) {
+        val manager = notificationManager()
+        val active = unread.isNotEmpty() && messageNotificationsEnabled(manager)
+        if (reminderConversationId != 0L && (!active || reminderConversationId !in unread)) {
+            manager.cancel(UNREAD_REMINDER_ID)
+            reminderConversationId = 0L
+        }
+        if (!reminderClock.due(SystemClock.elapsedRealtime(), active)) return
+        val conversationId = unread.first()
+        val text = if (unread.size == 1) "还有客户消息未读，点击查看" else "还有 ${unread.size} 个会话未读，点击查看"
+        runCatching {
+            manager.notify(UNREAD_REMINDER_ID, notification(NORMAL_CHANNEL_ID, text, ongoing = false, alert = true,
+                conversationId = conversationId, title = "值班未读提醒", count = unread.size))
+            reminderConversationId = conversationId
+        }.onFailure { Log.w("AgentNotifications", "Unable to post unread reminder", it) }
     }
 
     private fun cancelReadNotification(conversationId: Long, upToSeq: Long) {

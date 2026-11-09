@@ -12,8 +12,8 @@ android {
         applicationId = "com.chatv0.agent"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20261106
-        versionName = "0.2.5"
+        versionCode = 20261109
+        versionName = "0.2.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
